@@ -164,7 +164,8 @@ const CipherDNS = struct {
         if (!self.cache_enabled) return;
 
         var buf: [256]u8 = undefined;
-        const timestamp = std.time.timestamp();
+        const ts_timestamp = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts_timestamp.sec;
 
         if (std.mem.eql(u8, stat_type, "queries")) {
             const sql = try std.fmt.bufPrint(buf[0..], "INSERT INTO dns_stats (timestamp, queries, responses, errors, cache_hits) VALUES ({d}, {d}, 0, 0, 0)", .{ timestamp, increment });

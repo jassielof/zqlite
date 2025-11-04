@@ -332,7 +332,10 @@ pub const BlockchainDB = struct {
             .hash = std.mem.zeroes([32]u8),
             .previous_hash = std.mem.zeroes([32]u8),
             .merkle_root = std.mem.zeroes([32]u8),
-            .timestamp = std.time.timestamp(),
+            .timestamp = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
             .difficulty = 1,
             .nonce = 0,
             .transactions = @constCast(&transactions),
@@ -486,7 +489,10 @@ pub fn main() !void {
         .fee = 10,
         .nonce = 0,
         .signature = std.mem.zeroes([64]u8),
-        .timestamp = std.time.timestamp(),
+        .timestamp = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
         .data = "Payment to Bob",
     };
     tx1.hash = try tx1.calculateHash(allocator);
@@ -499,7 +505,10 @@ pub fn main() !void {
         .fee = 5,
         .nonce = 0,
         .signature = std.mem.zeroes([64]u8),
-        .timestamp = std.time.timestamp(),
+        .timestamp = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
         .data = "Payment to Charlie",
     };
     tx2.hash = try tx2.calculateHash(allocator);
@@ -511,7 +520,10 @@ pub fn main() !void {
         .hash = undefined,
         .previous_hash = blockchain.genesis_hash,
         .merkle_root = undefined,
-        .timestamp = std.time.timestamp(),
+        .timestamp = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
         .difficulty = 1,
         .nonce = 12345,
         .transactions = @constCast(&transactions),

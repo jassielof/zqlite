@@ -153,25 +153,29 @@ pub const WalletStorage = struct {
     
     pub fn storeWallet(self: *Self, wallet_id: []const u8, name: []const u8, coin_type: u32, mnemonic: []const u8, password: []const u8) !void {
         const encrypted_seed = try EncryptedStorage.encryptMnemonic(self.allocator, mnemonic, password);
-        
+
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
         const stored_wallet = StoredWallet{
             .id = try self.allocator.dupe(u8, wallet_id),
             .name = try self.allocator.dupe(u8, name),
             .coin_type = coin_type,
             .encrypted_seed = encrypted_seed,
-            .created_at = std.time.timestamp(),
-            .last_access = std.time.timestamp(),
+            .created_at = timestamp,
+            .last_access = timestamp,
         };
-        
+
         try self.wallets.put(stored_wallet.id, stored_wallet);
     }
     
     pub fn loadWallet(self: *Self, wallet_id: []const u8, password: []const u8) !EncryptedStorage.SecureString {
         const stored_wallet = self.wallets.getPtr(wallet_id) orelse return error.WalletNotFound;
-        
+
         // Update last access time
-        stored_wallet.last_access = std.time.timestamp();
-        
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
+        stored_wallet.last_access = timestamp;
+
         return EncryptedStorage.decryptMnemonic(self.allocator, stored_wallet.encrypted_seed, password);
     }
     

@@ -37,41 +37,45 @@ pub const QueryCache = struct {
             // Move to front of LRU list
             self.lru_list.remove(&entry.lru_node);
             self.lru_list.prepend(&entry.lru_node);
-            
+
             entry.access_count += 1;
-            entry.last_accessed = std.time.timestamp();
-            
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            entry.last_accessed = ts.sec;
+
             self.hit_count += 1;
             return &entry.result;
         }
-        
+
         self.miss_count += 1;
         return null;
     }
     
     /// Store query result in cache
     pub fn put(self: *Self, sql_hash: u64, sql: []const u8, result: []storage.Row) !void {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
+
         // Check if entry already exists
         if (self.cache_entries.get(sql_hash)) |existing_entry| {
             // Update existing entry
             existing_entry.result.deinit(self.allocator);
             existing_entry.result = try self.cloneResult(result);
-            existing_entry.last_accessed = std.time.timestamp();
+            existing_entry.last_accessed = timestamp;
             existing_entry.access_count += 1;
-            
+
             // Move to front
             self.lru_list.remove(&existing_entry.lru_node);
             self.lru_list.prepend(&existing_entry.lru_node);
             return;
         }
-        
+
         // Create new entry
         const entry = try self.allocator.create(CacheEntry);
         entry.hash = sql_hash;
         entry.sql = try self.allocator.dupe(u8, sql);
         entry.result = try self.cloneResult(result);
-        entry.created_at = std.time.timestamp();
-        entry.last_accessed = std.time.timestamp();
+        entry.created_at = timestamp;
+        entry.last_accessed = timestamp;
         entry.access_count = 1;
         entry.memory_size = self.calculateEntrySize(entry);
         
@@ -214,7 +218,8 @@ pub const QueryCache = struct {
     
     /// Remove expired entries based on TTL
     pub fn cleanupExpired(self: *Self, ttl_seconds: i64) !void {
-        const current_time = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const current_time = ts.sec;
         var entries_to_remove = std.ArrayList(*CacheEntry){};
         defer entries_to_remove.deinit(self.allocator);
         

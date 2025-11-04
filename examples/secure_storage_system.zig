@@ -58,7 +58,10 @@ pub const User = struct {
             .user_id = user_id,
             .username = username,
             .email = email,
-            .created_at = std.time.timestamp(),
+            .created_at = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
             .active = true,
         };
     }
@@ -86,7 +89,8 @@ pub const SecureFile = struct {
         std.crypto.random.bytes(&file_id);
         std.crypto.random.bytes(&encryption_key_id);
 
-        const now = std.time.timestamp();
+        const ts_now = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts_now.sec;
 
         return SecureFile{
             .file_id = file_id,
@@ -117,7 +121,8 @@ pub const FilePermission = struct {
     /// Check if permission is still valid
     pub fn isValid(self: *const FilePermission) bool {
         if (self.expires_at) |expires| {
-            return std.time.timestamp() < expires;
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            return ts.sec < expires;
         }
         return true;
     }
@@ -147,7 +152,10 @@ pub const AuditLog = struct {
             .action = action,
             .ip_address = ip_address,
             .user_agent = "ZQLite-SecureStorage/1.0.0",
-            .timestamp = std.time.timestamp(),
+            .timestamp = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
             .success = success,
             .details = details,
         };
@@ -338,7 +346,10 @@ pub const SecureStorageSystem = struct {
             .user_id = user_id,
             .access_level = .admin,
             .granted_by = user_id,
-            .granted_at = std.time.timestamp(),
+            .granted_at = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
             .expires_at = null,
         };
         try self.grantFilePermission(&permission);
@@ -524,8 +535,14 @@ pub fn main() !void {
         .user_id = bob.user_id,
         .access_level = .read_only,
         .granted_by = alice.user_id,
-        .granted_at = std.time.timestamp(),
-        .expires_at = std.time.timestamp() + (24 * 60 * 60), // 24 hours
+        .granted_at = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
+        .expires_at = blk: {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        break :blk ts.sec + (24 * 60 * 60);
+    }, // 24 hours
     };
     try storage.grantFilePermission(&permission);
 

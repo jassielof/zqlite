@@ -165,15 +165,17 @@ pub const HDWallet = struct {
     pub fn createWallet(allocator: Allocator, name: []const u8, coin_type: u32, mnemonic: []const u8, passphrase: []const u8) !Wallet {
         const seed = try seedFromMnemonic(mnemonic, passphrase);
         const master_key = try masterKeyFromSeed(seed);
-        
-        const wallet_id = try std.fmt.allocPrint(allocator, "wallet_{d}", .{std.time.timestamp()});
-        
+
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
+        const wallet_id = try std.fmt.allocPrint(allocator, "wallet_{d}", .{timestamp});
+
         return Wallet{
             .id = wallet_id,
             .name = try allocator.dupe(u8, name),
             .master_key = master_key,
             .coin_type = coin_type,
-            .created_at = std.time.timestamp(),
+            .created_at = timestamp,
         };
     }
 };

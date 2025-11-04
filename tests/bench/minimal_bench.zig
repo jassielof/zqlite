@@ -25,7 +25,8 @@ pub fn main() !void {
     try conn.execute("CREATE TABLE test (id INTEGER, value TEXT)");
 
     std.debug.print("Inserting 5000 rows (this would previously fail)...\n", .{});
-    const start = std.time.nanoTimestamp();
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     var i: usize = 0;
     while (i < 5000) : (i += 1) {
         try conn.execute("INSERT INTO test (id, value) VALUES (1, 'test')");
@@ -33,7 +34,9 @@ pub fn main() !void {
             std.debug.print("  Inserted {} rows...\n", .{i});
         }
     }
-    const duration = @as(u64, @intCast(std.time.nanoTimestamp() - start));
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
+    const duration = @as(u64, @intCast(end_time - start));
     const ops_per_sec = @as(f64, @floatFromInt(5000)) / (@as(f64, @floatFromInt(duration)) / 1_000_000_000.0);
 
     std.debug.print("✅ Successfully inserted 5000 rows!\n", .{});

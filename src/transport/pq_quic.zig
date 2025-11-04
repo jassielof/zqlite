@@ -339,7 +339,9 @@ pub const PQQuicTransport = struct {
         fn getNextPacketNumber(self: *PQConnection) u64 {
             // In real implementation, maintain packet number state
             _ = self;
-            return @as(u64, @intCast(std.time.timestamp()));
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            const timestamp = ts.sec;
+            return @as(u64, @intCast(timestamp));
         }
 
         pub fn deinit(self: *PQConnection, allocator: std.mem.Allocator) void {
@@ -383,7 +385,9 @@ pub const PQQuicTransport = struct {
 
     /// Connect to server (client)
     pub fn connect(self: *Self, server_address: std.net.Address) !ConnectionId {
-        const conn_id = @as(ConnectionId, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
+        const conn_id = @as(ConnectionId, @intCast(timestamp));
         const connection = try PQConnection.init(self.allocator, conn_id, server_address);
 
         // Derive initial keys
@@ -403,7 +407,9 @@ pub const PQQuicTransport = struct {
         if (!self.is_server) return error.NotAServer;
 
         // In real implementation, would listen for incoming packets
-        const conn_id = @as(ConnectionId, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
+        const conn_id = @as(ConnectionId, @intCast(timestamp));
         const client_addr = std.net.Address.parseIp("127.0.0.1", 0) catch unreachable;
         const connection = try PQConnection.init(self.allocator, conn_id, client_addr);
 

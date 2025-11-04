@@ -151,7 +151,10 @@ const PostQuantumBank = struct {
             .public_key_classical = keypair.classical.public_key,
             .public_key_pq = pq_key,
             .account_type = account_type,
-            .created_at = std.time.timestamp(),
+            .created_at = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
         };
 
         // Insert into database (simplified - in production would use prepared statements)
@@ -174,11 +177,13 @@ const PostQuantumBank = struct {
         std.debug.print("💸 Processing transfer: {s} → {s} (amount: {})\n", .{ from_account, to_account, amount });
 
         // Generate transaction ID
-        const tx_id = try std.fmt.allocPrint(self.allocator, "tx_{d}", .{std.time.timestamp()});
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
+        const tx_id = try std.fmt.allocPrint(self.allocator, "tx_{d}", .{timestamp});
         defer self.allocator.free(tx_id);
 
         // Create transaction data for signing
-        const tx_data = try std.fmt.allocPrint(self.allocator, "TRANSFER:{s}:{s}:{d}:{d}", .{ from_account, to_account, amount, std.time.timestamp() });
+        const tx_data = try std.fmt.allocPrint(self.allocator, "TRANSFER:{s}:{s}:{d}:{d}", .{ from_account, to_account, amount, timestamp });
         defer self.allocator.free(tx_data);
 
         // Sign transaction with hybrid signature
@@ -226,7 +231,10 @@ const PostQuantumBank = struct {
             .to_account = to_account,
             .amount = amount,
             .signature = signature,
-            .timestamp = std.time.timestamp(),
+            .timestamp = blk: {
+                const ts2 = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts2.sec;
+            },
             .tx_type = if (private_transfer) .PrivateTransfer else .Transfer,
             .zero_knowledge_proof = zkp_proof,
         };

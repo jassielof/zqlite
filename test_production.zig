@@ -226,15 +226,17 @@ fn testPerformance(allocator: std.mem.Allocator) !void {
     try db.execute("CREATE TABLE performance_test (id INTEGER, data TEXT)");
     
     // Measure insertion performance
-    const start_time = std.time.milliTimestamp();
-    
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const start_time = @divTrunc(ts_start.sec * 1000 + @divTrunc(ts_start.nsec, 1_000_000), 1);
+
     for (0..1000) |i| {
         const query = try std.fmt.allocPrint(allocator, "INSERT INTO performance_test VALUES ({d}, 'data_{d}')", .{ i, i });
         defer allocator.free(query);
         try db.execute(query);
     }
-    
-    const end_time = std.time.milliTimestamp();
+
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @divTrunc(ts_end.sec * 1000 + @divTrunc(ts_end.nsec, 1_000_000), 1);
     const duration = end_time - start_time;
     
     std.log.info("Inserted 1000 records in {d}ms ({d:.2} records/sec)", .{ duration, 1000.0 / (@as(f64, @floatFromInt(duration)) / 1000.0) });
@@ -250,9 +252,11 @@ fn testPerformance(allocator: std.mem.Allocator) !void {
         "SELECT COUNT(*) FROM performance_test",
     };
     
-    const concurrent_start = std.time.milliTimestamp();
+    const ts_conc_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const concurrent_start = @divTrunc(ts_conc_start.sec * 1000 + @divTrunc(ts_conc_start.nsec, 1_000_000), 1);
     const concurrent_results = try async_db.batchExecuteAsync(&concurrent_queries);
-    const concurrent_end = std.time.milliTimestamp();
+    const ts_conc_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const concurrent_end = @divTrunc(ts_conc_end.sec * 1000 + @divTrunc(ts_conc_end.nsec, 1_000_000), 1);
     
     defer {
         for (concurrent_results) |result| {
@@ -293,9 +297,11 @@ fn testCryptoProjectIntegration(allocator: std.mem.Allocator) !void {
     const encrypted_traffic = try crypto.encrypt(traffic_data);
     defer allocator.free(encrypted_traffic);
     
-    const insert_query = try std.fmt.allocPrint(allocator, 
-        "INSERT INTO vpn_sessions VALUES ('session_001', 'user_123', 'us-east', X'{}', {})", 
-        .{ std.fmt.fmtSliceHexLower(encrypted_traffic), std.time.timestamp() }
+    const ts1 = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const timestamp1 = ts1.sec;
+    const insert_query = try std.fmt.allocPrint(allocator,
+        "INSERT INTO vpn_sessions VALUES ('session_001', 'user_123', 'us-east', X'{}', {})",
+        .{ std.fmt.fmtSliceHexLower(encrypted_traffic), timestamp1 }
     );
     defer allocator.free(insert_query);
     
@@ -335,9 +341,11 @@ fn testCryptoProjectIntegration(allocator: std.mem.Allocator) !void {
     const encrypted_cert = try crypto.encrypt(cert_data);
     defer allocator.free(encrypted_cert);
     
+    const ts2 = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const timestamp2 = ts2.sec + 31536000;
     const cert_insert = try std.fmt.allocPrint(allocator,
         "INSERT INTO cns_certificates VALUES ('cert_001', X'{}', {})",
-        .{ std.fmt.fmtSliceHexLower(encrypted_cert), std.time.timestamp() + 31536000 }
+        .{ std.fmt.fmtSliceHexLower(encrypted_cert), timestamp2 }
     );
     defer allocator.free(cert_insert);
     

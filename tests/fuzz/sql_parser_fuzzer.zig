@@ -30,7 +30,10 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const config = FuzzConfig{
-        .seed = @intCast(std.time.timestamp()),
+        .seed = @intCast(blk: {
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            break :blk ts.sec;
+        }),
         .iterations = 10000,
         .max_sql_length = 1000,
         .verbose = false,

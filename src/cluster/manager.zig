@@ -22,6 +22,8 @@ pub const ClusterManager = struct {
     const Self = @This();
     
     pub fn init(allocator: std.mem.Allocator, cluster_id: []const u8, local_node_id: []const u8) !Self {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
         const local_node = try allocator.create(Node);
         local_node.* = Node{
             .id = try allocator.dupe(u8, local_node_id),
@@ -29,7 +31,7 @@ pub const ClusterManager = struct {
             .port = 8080,
             .role = .Primary,
             .status = .Healthy,
-            .last_seen = std.time.timestamp(),
+            .last_seen = timestamp,
             .load_factor = 0.0,
             .allocated_shards = std.array_list.Managed(u32).init(allocator),
         };
@@ -50,6 +52,8 @@ pub const ClusterManager = struct {
     
     /// Add node to cluster
     pub fn addNode(self: *Self, node_id: []const u8, address: []const u8, port: u16) !void {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
         const node = try self.allocator.create(Node);
         node.* = Node{
             .id = try self.allocator.dupe(u8, node_id),
@@ -57,7 +61,7 @@ pub const ClusterManager = struct {
             .port = port,
             .role = .Standby,
             .status = .Healthy,
-            .last_seen = std.time.timestamp(),
+            .last_seen = timestamp,
             .load_factor = 0.0,
             .allocated_shards = std.array_list.Managed(u32).init(self.allocator),
         };
@@ -98,25 +102,27 @@ pub const ClusterManager = struct {
     
     /// Route query to appropriate node
     pub fn routeQuery(self: *Self, query: ClusterQuery) !QueryResult {
-        const start_time = std.time.microTimestamp();
-        
+        const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start_time: i64 = @intCast(@divTrunc((@as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec), 1000));
+
         // Determine target nodes based on query
         const target_nodes = try self.determineTargetNodes(query);
         defer self.allocator.free(target_nodes);
-        
+
         var results = std.array_list.Managed(QueryResult).init(self.allocator);
         defer results.deinit();
-        
+
         // Execute query on target nodes
         for (target_nodes) |node| {
             const result = try self.executeQueryOnNode(node, query);
             try results.append(result);
         }
-        
+
         // Merge results
         const merged_result = try self.mergeResults(results.items);
-        
-        const end_time = std.time.microTimestamp();
+
+        const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const end_time: i64 = @intCast(@divTrunc((@as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec), 1000));
         const execution_time = end_time - start_time;
         
         // Update metrics

@@ -94,7 +94,9 @@ const NextGenDatabase = struct {
         defer self.allocator.free(encrypted_api_key);
 
         var buf: [1024]u8 = undefined;
-        const sql = try std.fmt.bufPrint(buf[0..], "INSERT INTO ai_agents (name, encrypted_config, api_keys, created_at) VALUES ('{s}', 'encrypted', 'encrypted', {})", .{ name, std.time.timestamp() });
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
+        const sql = try std.fmt.bufPrint(buf[0..], "INSERT INTO ai_agents (name, encrypted_config, api_keys, created_at) VALUES ('{s}', 'encrypted', 'encrypted', {})", .{ name, timestamp });
 
         _ = try self.async_db.executeAsync(sql);
         std.debug.print("🤖 AI Agent '{s}' stored securely\n", .{name});
@@ -106,7 +108,9 @@ const NextGenDatabase = struct {
         defer self.allocator.free(encrypted_cert);
 
         var buf: [512]u8 = undefined;
-        const sql = try std.fmt.bufPrint(buf[0..], "INSERT INTO vpn_connections (client_id, encrypted_cert, connection_time, ip_address, data_transferred) VALUES ('{s}', 'encrypted', {}, '{s}', 0)", .{ client_id, std.time.timestamp(), ip_address });
+        const ts2 = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp2 = ts2.sec;
+        const sql = try std.fmt.bufPrint(buf[0..], "INSERT INTO vpn_connections (client_id, encrypted_cert, connection_time, ip_address, data_transferred) VALUES ('{s}', 'encrypted', {}, '{s}', 0)", .{ client_id, timestamp2, ip_address });
 
         _ = try self.async_db.executeAsync(sql);
         std.debug.print("🔒 VPN connection for '{s}' logged securely\n", .{client_id});
@@ -118,7 +122,9 @@ const NextGenDatabase = struct {
         defer self.allocator.free(encrypted_key);
 
         var buf: [512]u8 = undefined;
-        const sql = try std.fmt.bufPrint(buf[0..], "INSERT INTO crypto_wallets (address, encrypted_private_key, balance, created_at) VALUES ('{s}', 'encrypted', {}, {})", .{ address, balance, std.time.timestamp() });
+        const ts3 = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp3 = ts3.sec;
+        const sql = try std.fmt.bufPrint(buf[0..], "INSERT INTO crypto_wallets (address, encrypted_private_key, balance, created_at) VALUES ('{s}', 'encrypted', {}, {})", .{ address, balance, timestamp3 });
 
         _ = try self.async_db.executeAsync(sql);
         std.debug.print("₿ Crypto wallet '{s}' stored with encrypted key\n", .{address});

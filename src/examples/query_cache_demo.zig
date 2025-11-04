@@ -62,25 +62,28 @@ pub fn main() !void {
         std.debug.print("{}. Query: {s}\n", .{ i + 1, query });
         
         // First execution - cache miss
-        const start_time = std.time.nanoTimestamp();
-        
+        const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start_time = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+
         // Hash the query for caching
         const query_hash = cache.hashQuery(query);
-        
+
         // Check if query is in cache
         const cached_result = cache.get(query_hash);
-        
+
         if (cached_result == null) {
             std.debug.print("   ❌ Cache MISS - Executing query\n", .{});
-            
+
             // Execute the query (simulated - would integrate with real executor)
             std.Thread.sleep(10 * std.time.ns_per_ms); // Simulate query execution time
-            
+
             // Create mock result for caching
+            const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
             var mock_result = zqlite.query_cache.CachedResult{
                 .rows = try allocator.alloc(zqlite.storage.Row, 2),
                 .columns = try allocator.alloc([]const u8, 2),
-                .execution_time_ns = std.time.nanoTimestamp() - start_time,
+                .execution_time_ns = end_time - start_time,
             };
             
             // Set up mock data
@@ -95,13 +98,17 @@ pub fn main() !void {
             
             // Cache the result
             try cache.put(query_hash, query, mock_result);
-            
-            const execution_time = std.time.nanoTimestamp() - start_time;
+
+            const ts_final = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            const final_time = @as(i128, ts_final.sec) * std.time.ns_per_s + ts_final.nsec;
+            const execution_time = final_time - start_time;
             std.debug.print("   ⏱️  Execution time: {d:.2}ms\n", .{@as(f64, @floatFromInt(execution_time)) / std.time.ns_per_ms});
-            
+
         } else {
             std.debug.print("   ✅ Cache HIT - Using cached result\n", .{});
-            const cache_time = std.time.nanoTimestamp() - start_time;
+            const ts_cache = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            const cache_end_time = @as(i128, ts_cache.sec) * std.time.ns_per_s + ts_cache.nsec;
+            const cache_time = cache_end_time - start_time;
             std.debug.print("   ⚡ Cache retrieval time: {d:.2}ms\n", .{@as(f64, @floatFromInt(cache_time)) / std.time.ns_per_ms});
             std.debug.print("   📊 Original execution time: {d:.2}ms\n", .{@as(f64, @floatFromInt(cached_result.?.execution_time_ns)) / std.time.ns_per_ms});
         }

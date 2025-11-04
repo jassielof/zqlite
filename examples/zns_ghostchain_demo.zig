@@ -35,7 +35,8 @@ pub const ZNSDomainRecord = struct {
 
     /// Check if domain is currently valid (not expired)
     pub fn isValid(self: *const ZNSDomainRecord) bool {
-        const now = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts.sec;
         return now < self.expires_at;
     }
 };
@@ -107,7 +108,10 @@ pub const ZNSManager = struct {
             .ttl = 3600, // 1 hour default
             .signature = signature,
             .block_height = try self.getCurrentBlockHeight(),
-            .expires_at = std.time.timestamp() + (365 * 24 * 60 * 60), // 1 year
+            .expires_at = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec + (365 * 24 * 60 * 60); // 1 year
+            },
             .subdomain_allowed = true,
             .transfer_locked = false,
         };

@@ -17,7 +17,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     
-    std.log.info("=€ Starting ZQLite Phase 2 Integration Tests...");
+    std.log.info("=ï¿½ Starting ZQLite Phase 2 Integration Tests...");
     
     // Test 1: Batch Processing with 8K+ operations
     try testBatchProcessing(allocator);
@@ -90,7 +90,7 @@ fn testBatchProcessing(allocator: std.mem.Allocator) !void {
         return error.TestFailed;
     }
     
-    std.log.info(" Batch Processing Test Passed - {d} operations in {d}¼s ({d} ops/sec)", .{
+    std.log.info(" Batch Processing Test Passed - {d} operations in {d}ï¿½s ({d} ops/sec)", .{
         result.successful_operations,
         result.execution_time_us,
         result.throughput_ops_per_sec,
@@ -162,9 +162,11 @@ fn testHotStandby(allocator: std.mem.Allocator) !void {
     defer standby.deinit();
     
     // Test replication
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const timestamp = ts.sec;
     const entry = hot_standby.ReplicationEntry{
         .index = 1,
-        .timestamp = std.time.timestamp(),
+        .timestamp = timestamp,
         .operation_type = .Insert,
         .table = "test_table",
         .row_id = 1,
@@ -383,9 +385,11 @@ fn testFullIntegration(allocator: std.mem.Allocator) !void {
     }
     
     // 3. Replicate to standby
+    const ts3 = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const timestamp3 = ts3.sec;
     const replication_entry = hot_standby.ReplicationEntry{
         .index = 1,
-        .timestamp = std.time.timestamp(),
+        .timestamp = timestamp3,
         .operation_type = .Insert,
         .table = "test_table",
         .row_id = 3,
@@ -439,13 +443,13 @@ fn testFullIntegration(allocator: std.mem.Allocator) !void {
     std.log.info(" Full Integration Test Passed - All Phase 2 components working together");
     
     // Print summary
-    std.log.info("=Ê Phase 2 Summary:");
+    std.log.info("=ï¿½ Phase 2 Summary:");
     std.log.info("  - Batch Operations: {d}", .{batch_metrics.total_operations});
     std.log.info("  - Deterministic Executions: {d}", .{det_state.execution_count});
     std.log.info("  - Replication Entries: {d}", .{standby_metrics.entries_replicated});
     std.log.info("  - Cluster Nodes: {d}", .{cluster_metrics.active_nodes});
     std.log.info("  - Distributed Queries: {d}", .{dist_metrics.queries_executed});
-    std.log.info("  - Average Query Time: {d}¼s", .{dist_metrics.average_execution_time_us});
+    std.log.info("  - Average Query Time: {d}ï¿½s", .{dist_metrics.average_execution_time_us});
     std.log.info("  - Throughput: {d} ops/sec", .{batch_result.throughput_ops_per_sec});
 }
 

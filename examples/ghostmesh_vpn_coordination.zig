@@ -49,7 +49,8 @@ pub const VPNPeer = struct {
 
     /// Check if peer is currently active
     pub fn isActive(self: *const VPNPeer) bool {
-        const now = std.time.timestamp();
+        const ts_now = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts_now.sec;
         return (now - self.last_handshake) < 300; // 5 minutes
     }
 
@@ -57,7 +58,9 @@ pub const VPNPeer = struct {
     pub fn updateStats(self: *VPNPeer, tx: u64, rx: u64) void {
         self.bytes_tx += tx;
         self.bytes_rx += rx;
-        self.last_handshake = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+
+        self.last_handshake = ts.sec;
     }
 };
 
@@ -71,7 +74,8 @@ pub const VPNRoute = struct {
 
     /// Check if route is still valid
     pub fn isValid(self: *const VPNRoute) bool {
-        const now = std.time.timestamp();
+        const ts_now = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts_now.sec;
         return (now - self.created_at) < 3600; // 1 hour validity
     }
 };
@@ -149,7 +153,10 @@ pub const GhostMeshServer = struct {
             .endpoint = endpoint,
             .public_key = peer_public_key,
             .allowed_ips = allowed_ips,
-            .last_handshake = std.time.timestamp(),
+            .last_handshake = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
             .bytes_tx = 0,
             .bytes_rx = 0,
             .status = .connecting,
@@ -175,7 +182,9 @@ pub const GhostMeshServer = struct {
 
         if (self.peers.getPtr(peer_id)) |peer_ptr| {
             peer_ptr.status = .online;
-            peer_ptr.last_handshake = std.time.timestamp();
+            const ts2 = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+
+            peer_ptr.last_handshake = ts2.sec;
         }
 
         std.debug.print("✅ Peer authenticated successfully\n", .{});
@@ -207,7 +216,10 @@ pub const GhostMeshServer = struct {
             .gateway = gateway_peer,
             .metric = metric,
             .interface = "ghost0",
-            .created_at = std.time.timestamp(),
+            .created_at = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
         };
 
         try self.routes.append(route);

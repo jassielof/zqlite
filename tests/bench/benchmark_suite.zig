@@ -117,7 +117,8 @@ fn benchmarkSimpleInserts(allocator: std.mem.Allocator) !BenchmarkResult {
 
     try conn.execute("CREATE TABLE bench_insert (id INTEGER, value TEXT)");
 
-    const start = std.time.nanoTimestamp();
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;
@@ -125,7 +126,9 @@ fn benchmarkSimpleInserts(allocator: std.mem.Allocator) !BenchmarkResult {
         try conn.execute("INSERT INTO bench_insert (id, value) VALUES (1, 'test')");
     }
 
-    const duration = @as(u64, @intCast(std.time.nanoTimestamp() - start));
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
+    const duration = @as(u64, @intCast(end_time - start));
     const mem_used = getMemoryUsage() - mem_before;
     const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (@as(f64, @floatFromInt(duration)) / 1_000_000_000.0);
 
@@ -146,7 +149,8 @@ fn benchmarkBulkInserts(allocator: std.mem.Allocator) !BenchmarkResult {
 
     try conn.execute("CREATE TABLE bench_bulk (id INTEGER, data TEXT)");
 
-    const start = std.time.nanoTimestamp();
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     try conn.execute("BEGIN TRANSACTION");
@@ -156,7 +160,9 @@ fn benchmarkBulkInserts(allocator: std.mem.Allocator) !BenchmarkResult {
     }
     try conn.execute("COMMIT");
 
-    const duration = @as(u64, @intCast(std.time.nanoTimestamp() - start));
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
+    const duration = @as(u64, @intCast(end_time - start));
     const mem_used = getMemoryUsage() - mem_before;
     const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (@as(f64, @floatFromInt(duration)) / 1_000_000_000.0);
 
@@ -184,7 +190,8 @@ fn benchmarkSelects(allocator: std.mem.Allocator) !BenchmarkResult {
         try conn.execute("INSERT INTO bench_select VALUES (1, 'data')");
     }
 
-    const start = std.time.nanoTimestamp();
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     i = 0;
@@ -193,7 +200,9 @@ fn benchmarkSelects(allocator: std.mem.Allocator) !BenchmarkResult {
         result.deinit();
     }
 
-    const duration = @as(u64, @intCast(std.time.nanoTimestamp() - start));
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
+    const duration = @as(u64, @intCast(end_time - start));
     const mem_used = getMemoryUsage() - mem_before;
     const ops_per_sec = @as(f64, @floatFromInt(num_queries)) / (@as(f64, @floatFromInt(duration)) / 1_000_000_000.0);
 
@@ -215,7 +224,8 @@ fn benchmarkUpdates(allocator: std.mem.Allocator) !BenchmarkResult {
     try conn.execute("CREATE TABLE bench_update (id INTEGER, value TEXT)");
     try conn.execute("INSERT INTO bench_update VALUES (1, 'initial')");
 
-    const start = std.time.nanoTimestamp();
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;
@@ -223,7 +233,9 @@ fn benchmarkUpdates(allocator: std.mem.Allocator) !BenchmarkResult {
         try conn.execute("UPDATE bench_update SET value = 'updated'");
     }
 
-    const duration = @as(u64, @intCast(std.time.nanoTimestamp() - start));
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
+    const duration = @as(u64, @intCast(end_time - start));
     const mem_used = getMemoryUsage() - mem_before;
     const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (@as(f64, @floatFromInt(duration)) / 1_000_000_000.0);
 
@@ -250,7 +262,8 @@ fn benchmarkDeletes(allocator: std.mem.Allocator) !BenchmarkResult {
         try conn.execute("INSERT INTO bench_delete VALUES (1, 'data')");
     }
 
-    const start = std.time.nanoTimestamp();
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     i = 0;
@@ -258,7 +271,9 @@ fn benchmarkDeletes(allocator: std.mem.Allocator) !BenchmarkResult {
         try conn.execute("DELETE FROM bench_delete WHERE id = 1");
     }
 
-    const duration = @as(u64, @intCast(std.time.nanoTimestamp() - start));
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
+    const duration = @as(u64, @intCast(end_time - start));
     const mem_used = getMemoryUsage() - mem_before;
     const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (@as(f64, @floatFromInt(duration)) / 1_000_000_000.0);
 
@@ -274,7 +289,8 @@ fn benchmarkDeletes(allocator: std.mem.Allocator) !BenchmarkResult {
 fn benchmarkCreateTableDefaults(allocator: std.mem.Allocator) !BenchmarkResult {
     const num_ops: usize = 100;
 
-    const start = std.time.nanoTimestamp();
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;
@@ -290,7 +306,9 @@ fn benchmarkCreateTableDefaults(allocator: std.mem.Allocator) !BenchmarkResult {
         conn.close();
     }
 
-    const duration = @as(u64, @intCast(std.time.nanoTimestamp() - start));
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
+    const duration = @as(u64, @intCast(end_time - start));
     const mem_used = getMemoryUsage() - mem_before;
     const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (@as(f64, @floatFromInt(duration)) / 1_000_000_000.0);
 
@@ -311,7 +329,8 @@ fn benchmarkMixedWorkload(allocator: std.mem.Allocator) !BenchmarkResult {
 
     try conn.execute("CREATE TABLE bench_mixed (id INTEGER, value TEXT)");
 
-    const start = std.time.nanoTimestamp();
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;
@@ -329,7 +348,9 @@ fn benchmarkMixedWorkload(allocator: std.mem.Allocator) !BenchmarkResult {
         }
     }
 
-    const duration = @as(u64, @intCast(std.time.nanoTimestamp() - start));
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
+    const duration = @as(u64, @intCast(end_time - start));
     const mem_used = getMemoryUsage() - mem_before;
     const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (@as(f64, @floatFromInt(duration)) / 1_000_000_000.0);
 
@@ -351,7 +372,8 @@ fn benchmarkTransactions(allocator: std.mem.Allocator) !BenchmarkResult {
 
     try conn.execute("CREATE TABLE bench_txn (id INTEGER, value TEXT)");
 
-    const start = std.time.nanoTimestamp();
+    const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;
@@ -364,7 +386,9 @@ fn benchmarkTransactions(allocator: std.mem.Allocator) !BenchmarkResult {
         try conn.execute("COMMIT");
     }
 
-    const duration = @as(u64, @intCast(std.time.nanoTimestamp() - start));
+    const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
+    const duration = @as(u64, @intCast(end_time - start));
     const mem_used = getMemoryUsage() - mem_before;
     const total_ops = num_txns * ops_per_txn;
     const ops_per_sec = @as(f64, @floatFromInt(total_ops)) / (@as(f64, @floatFromInt(duration)) / 1_000_000_000.0);

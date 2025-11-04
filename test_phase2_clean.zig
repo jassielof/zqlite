@@ -164,7 +164,10 @@ fn testHotStandby(allocator: std.mem.Allocator) !void {
     // Test replication
     const entry = hot_standby.ReplicationEntry{
         .index = 1,
-        .timestamp = std.time.timestamp(),
+        .timestamp = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
         .operation_type = .Insert,
         .table = "test_table",
         .row_id = 1,
@@ -385,7 +388,10 @@ fn testFullIntegration(allocator: std.mem.Allocator) !void {
     // 3. Replicate to standby
     const replication_entry = hot_standby.ReplicationEntry{
         .index = 1,
-        .timestamp = std.time.timestamp(),
+        .timestamp = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
         .operation_type = .Insert,
         .table = "test_table",
         .row_id = 3,

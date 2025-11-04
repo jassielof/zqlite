@@ -74,7 +74,9 @@ pub const Transport = struct {
     }
 
     pub fn connect(self: *Self, server_address: std.net.Address) !ConnectionId {
-        const conn_id = @as(ConnectionId, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = ts.sec;
+        const conn_id = @as(ConnectionId, @intCast(timestamp));
         const connection = try Connection.init(self.allocator, conn_id, server_address);
         connection.state = .Connected;
         try self.connections.append(connection);

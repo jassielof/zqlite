@@ -414,6 +414,8 @@ test "Key storage operations" {
     var key_storage = KeyStorage.init(allocator);
     defer key_storage.deinit();
     
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const timestamp = ts.sec;
     const stored_key = KeyStorage.StoredKey{
         .key_id = try allocator.dupe(u8, "test_key_123"),
         .wallet_id = try allocator.dupe(u8, "test_wallet"),
@@ -421,8 +423,8 @@ test "Key storage operations" {
         .key_type = .ED25519,
         .public_key = try allocator.dupe(u8, "test_public_key"),
         .metadata = try allocator.dupe(u8, "test metadata"),
-        .created_at = std.time.timestamp(),
-        .last_used = std.time.timestamp(),
+        .created_at = timestamp,
+        .last_used = timestamp,
     };
     
     // Store key
