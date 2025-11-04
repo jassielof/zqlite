@@ -1132,7 +1132,8 @@ pub const Parser = struct {
                 // Handle CURRENT_TIMESTAMP as a special function
                 try self.advance();
                 // Generate current timestamp in ISO format
-                const timestamp = std.time.timestamp();
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                const timestamp = ts.sec;
                 const timestamp_str = try std.fmt.allocPrint(self.allocator, "{d}-01-01 12:00:00", .{1970 + @divFloor(timestamp, 31536000)});
                 return ast.Value{
                     .Text = timestamp_str
@@ -1152,7 +1153,8 @@ pub const Parser = struct {
                             try self.advance(); // consume ')'
                         }
                         // Generate current timestamp in ISO format
-                        const timestamp = std.time.timestamp();
+                        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                        const timestamp = ts.sec;
                         const timestamp_str = try std.fmt.allocPrint(self.allocator, "{d}-01-01 12:00:00", .{1970 + @divFloor(timestamp, 31536000)});
                         return ast.Value{
                             .Text = timestamp_str

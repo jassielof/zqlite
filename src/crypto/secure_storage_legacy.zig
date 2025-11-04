@@ -651,7 +651,8 @@ pub const CryptoTransactionLog = struct {
 
     /// Log a database operation with post-quantum cryptographic proof
     pub fn logOperation(self: *Self, table_name: []const u8, operation: []const u8, data: []const u8) !void {
-        const transaction_id = @as(u64, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const transaction_id = @as(u64, @intCast(ts.sec));
         const data_hash = try self.crypto_engine.hashData(data);
 
         // Get previous hash for blockchain-style chaining
@@ -672,12 +673,13 @@ pub const CryptoTransactionLog = struct {
         // Create hybrid signature (classical + post-quantum)
         const signature = try self.crypto_engine.signTransaction(signing_data.items);
 
+        const ts2 = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const entry = LogEntry{
             .transaction_id = transaction_id,
             .table_name = try self.allocator.dupe(u8, table_name),
             .operation = try self.allocator.dupe(u8, operation),
             .data_hash = data_hash,
-            .timestamp = std.time.timestamp(),
+            .timestamp = ts2.sec,
             .signature = signature,
             .prev_hash = prev_hash,
         };

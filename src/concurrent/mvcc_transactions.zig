@@ -35,6 +35,7 @@ pub const MVCCTransactionManager = struct {
         const transaction_id = self.generateTransactionId();
         const start_version = self.version_counter.load(.acquire);
         
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const transaction = try self.allocator.create(Transaction);
         transaction.* = Transaction{
             .id = transaction_id,
@@ -46,7 +47,7 @@ pub const MVCCTransactionManager = struct {
             .write_set = std.HashMap(RowKey, RowValue).init(self.allocator),
             .locks = std.array_list.Managed(LockInfo).init(self.allocator),
             .allocator = self.allocator,
-            .created_at = std.time.timestamp(),
+            .created_at = ts.sec,
         };
 
         self.global_lock.lock();
@@ -91,11 +92,12 @@ pub const MVCCTransactionManager = struct {
         }
 
         // Acquire write lock
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const lock_info = LockInfo{
             .table = try self.allocator.dupe(u8, table),
             .row_id = row_id,
             .lock_type = .Write,
-            .acquired_at = std.time.timestamp(),
+            .acquired_at = ts.sec,
         };
 
         // Check for deadlocks before acquiring lock
@@ -172,10 +174,11 @@ pub const MVCCTransactionManager = struct {
         transaction.commit_version = commit_version;
 
         // Log the commit
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const commit_entry = CommitLogEntry{
             .transaction_id = transaction_id,
             .commit_version = commit_version,
-            .timestamp = std.time.timestamp(),
+            .timestamp = ts.sec,
             .write_count = transaction.write_set.count(),
         };
         try self.commit_log.append(commit_entry);
@@ -310,7 +313,8 @@ pub const MVCCTransactionManager = struct {
 
     /// Generate a unique transaction ID
     fn generateTransactionId(self: *Self) TransactionId {
-        return @as(TransactionId, @intCast(std.time.timestamp())) * 1000 + @as(TransactionId, @intCast(self.transactions.count()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        return @as(TransactionId, @intCast(ts.sec)) * 1000 + @as(TransactionId, @intCast(self.transactions.count()));
     }
 
     /// Get transaction statistics

@@ -130,11 +130,12 @@ pub const HotStandby = struct {
         
         // Add to replication log
         try self.replication_log.append(entry);
-        
+
         // Update sync state
         self.sync_state.last_applied_index = entry.index;
-        self.sync_state.last_applied_timestamp = std.time.timestamp();
-        
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        self.sync_state.last_applied_timestamp = ts.sec;
+
         // Apply entry immediately for better performance
         try self.applyEntry(entry);
         
@@ -451,7 +452,8 @@ const HeartbeatManager = struct {
     pub fn startMonitoring(self: *Self, primary: *Node) !void {
         self.primary_node = primary;
         self.is_monitoring = true;
-        self.last_heartbeat = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        self.last_heartbeat = ts.sec;
         // Start background monitoring thread
     }
     
@@ -471,10 +473,11 @@ const HeartbeatManager = struct {
     
     pub fn isPrimaryHealthy(self: *Self) bool {
         if (!self.is_monitoring) return false;
-        
-        const now = std.time.timestamp();
+
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts.sec;
         const time_since_heartbeat = now - self.last_heartbeat;
-        
+
         return time_since_heartbeat < @as(i64, @intCast(self.heartbeat_timeout_ms));
     }
     
@@ -503,9 +506,10 @@ const FailoverManager = struct {
         if (self.failover_in_progress) {
             return error.FailoverInProgress;
         }
-        
+
         self.failover_in_progress = true;
-        self.failover_start_time = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        self.failover_start_time = ts.sec;
     }
     
     pub fn completeFailover(self: *Self) void {
@@ -571,9 +575,10 @@ test "hot standby basic operations" {
     try testing.expect(hot_standby.getReplicationLag() == 0);
     
     // Test replication entry
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
     const entry = ReplicationEntry{
         .index = 1,
-        .timestamp = std.time.timestamp(),
+        .timestamp = ts.sec,
         .operation_type = .Insert,
         .table = "test_table",
         .row_id = 1,

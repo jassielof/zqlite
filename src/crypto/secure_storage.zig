@@ -349,8 +349,9 @@ pub const CryptoTransactionLog = struct {
     }
 
     pub fn addTransaction(self: *Self, operation: []const u8, data_hash: [32]u8) !void {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const entry = TransactionEntry{
-            .timestamp = std.time.timestamp(),
+            .timestamp = ts.sec,
             .operation = try self.allocator.dupe(u8, operation),
             .hash = data_hash,
         };

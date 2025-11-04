@@ -146,7 +146,8 @@ pub const ZNSAdapter = struct {
     /// Validate ZNS record integrity
     pub fn validateRecord(self: Self, record: ZNSRecord) !bool {
         // Check timestamp is reasonable (within 24 hours)
-        const current_time = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const current_time = ts.sec;
         if (@abs(current_time - @as(i64, @intCast(record.timestamp))) > 86400) {
             return false;
         }

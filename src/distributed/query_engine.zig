@@ -34,63 +34,67 @@ pub const DistributedQueryEngine = struct {
     
     /// Execute distributed query
     pub fn executeQuery(self: *Self, sql: []const u8) !DistributedQueryResult {
-        const start_time = std.time.microTimestamp();
-        
+        const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start_time: i64 = @intCast(@divTrunc((@as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec), 1000));
+
         // Check cache first
         if (self.query_cache.get(sql)) |cached_result| {
             self.metrics.cache_hits += 1;
             return cached_result;
         }
-        
+
         // Parse SQL
         const parsed_query = try self.parseQuery(sql);
         defer parsed_query.deinit(self.allocator);
-        
+
         // Create execution plan
         const execution_plan = try self.query_planner.createPlan(parsed_query);
         defer execution_plan.deinit(self.allocator);
-        
+
         // Execute plan across cluster
         const result = try self.executePlan(execution_plan);
-        
+
         // Cache result if appropriate
         if (self.shouldCacheResult(parsed_query)) {
             try self.query_cache.put(sql, result);
         }
-        
-        const end_time = std.time.microTimestamp();
+
+        const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const end_time: i64 = @intCast(@divTrunc((@as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec), 1000));
         const execution_time = end_time - start_time;
-        
+
         // Update metrics
         self.metrics.queries_executed += 1;
-        self.metrics.total_execution_time_us += execution_time;
+        self.metrics.total_execution_time_us += @intCast(execution_time);
         self.metrics.average_execution_time_us = self.metrics.total_execution_time_us / self.metrics.queries_executed;
-        
+
         return result;
     }
     
     /// Execute prepared statement
     pub fn executePrepared(self: *Self, statement_id: u64, parameters: []const storage.Value) !DistributedQueryResult {
-        const start_time = std.time.microTimestamp();
-        
+        const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start_time: i64 = @intCast(@divTrunc((@as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec), 1000));
+
         // Get prepared statement
         const prepared_stmt = self.query_planner.getPreparedStatement(statement_id) orelse {
             return error.StatementNotFound;
         };
-        
+
         // Create execution plan with parameters
         const execution_plan = try self.query_planner.createPlanWithParameters(prepared_stmt, parameters);
         defer execution_plan.deinit(self.allocator);
-        
+
         // Execute plan
         const result = try self.executePlan(execution_plan);
-        
-        const end_time = std.time.microTimestamp();
+
+        const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const end_time: i64 = @intCast(@divTrunc((@as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec), 1000));
         const execution_time = end_time - start_time;
-        
+
         self.metrics.prepared_queries_executed += 1;
-        self.metrics.total_execution_time_us += execution_time;
-        
+        self.metrics.total_execution_time_us += @intCast(execution_time);
+
         return result;
     }
     
@@ -118,41 +122,45 @@ pub const DistributedQueryEngine = struct {
     
     /// Execute join query across nodes
     pub fn executeJoin(self: *Self, join_query: JoinQuery) !DistributedQueryResult {
-        const start_time = std.time.microTimestamp();
-        
+        const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start_time: i64 = @intCast(@divTrunc((@as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec), 1000));
+
         // Create join execution plan
         const join_plan = try self.query_planner.createJoinPlan(join_query);
         defer join_plan.deinit(self.allocator);
-        
+
         // Execute join across nodes
         const result = try self.executeJoinPlan(join_plan);
-        
-        const end_time = std.time.microTimestamp();
+
+        const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const end_time: i64 = @intCast(@divTrunc((@as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec), 1000));
         const execution_time = end_time - start_time;
-        
+
         self.metrics.join_queries_executed += 1;
-        self.metrics.total_execution_time_us += execution_time;
-        
+        self.metrics.total_execution_time_us += @intCast(execution_time);
+
         return result;
     }
     
     /// Execute aggregation query
     pub fn executeAggregation(self: *Self, agg_query: AggregationQuery) !DistributedQueryResult {
-        const start_time = std.time.microTimestamp();
-        
+        const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start_time: i64 = @intCast(@divTrunc((@as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec), 1000));
+
         // Create aggregation plan
         const agg_plan = try self.query_planner.createAggregationPlan(agg_query);
         defer agg_plan.deinit(self.allocator);
-        
+
         // Execute aggregation across nodes
         const result = try self.executeAggregationPlan(agg_plan);
-        
-        const end_time = std.time.microTimestamp();
+
+        const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const end_time: i64 = @intCast(@divTrunc((@as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec), 1000));
         const execution_time = end_time - start_time;
-        
+
         self.metrics.aggregation_queries_executed += 1;
-        self.metrics.total_execution_time_us += execution_time;
-        
+        self.metrics.total_execution_time_us += @intCast(execution_time);
+
         return result;
     }
     

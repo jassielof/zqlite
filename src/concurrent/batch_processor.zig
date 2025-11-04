@@ -27,25 +27,26 @@ pub const BatchProcessor = struct {
     
     /// Process a batch of operations with vectorized optimizations
     pub fn processBatch(self: *Self, operations: []const BatchOperation) !BatchResult {
-        const start_time = std.time.microTimestamp();
-        
+        const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start_time: i64 = @intCast(@divTrunc((@as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec), 1000));
+
         // Validate batch size
         if (operations.len > self.batch_size) {
             return error.BatchTooLarge;
         }
-        
+
         // Pre-process operations for vectorization
         const vectorized_batch = try self.vectorized_ops.preprocess(operations);
         defer vectorized_batch.deinit(self.allocator);
-        
+
         // Begin batch transaction
         const batch_tx = try self.mvcc_manager.beginTransaction(.RepeatableRead);
         errdefer self.mvcc_manager.abortTransaction(batch_tx) catch {};
-        
+
         // Process operations in vectorized batches
         var results = try self.allocator.alloc(OperationResult, operations.len);
         var success_count: u32 = 0;
-        
+
         for (vectorized_batch.groups.items) |group| {
             switch (group.operation_type) {
                 .Insert => {
@@ -66,21 +67,22 @@ pub const BatchProcessor = struct {
                 },
             }
         }
-        
+
         // Commit batch transaction
         try self.mvcc_manager.commitTransaction(batch_tx);
-        
-        const end_time = std.time.microTimestamp();
+
+        const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const end_time: i64 = @intCast(@divTrunc((@as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec), 1000));
         const execution_time = end_time - start_time;
-        
+
         // Update metrics
-        self.metrics.updateBatchMetrics(operations.len, success_count, execution_time);
-        
+        self.metrics.updateBatchMetrics(operations.len, success_count, @intCast(execution_time));
+
         return BatchResult{
             .results = results,
             .total_operations = operations.len,
             .successful_operations = success_count,
-            .execution_time_us = execution_time,
+            .execution_time_us = @intCast(execution_time),
             .throughput_ops_per_sec = @intCast((success_count * 1_000_000) / @max(execution_time, 1)),
         };
     }

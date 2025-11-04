@@ -59,33 +59,39 @@ pub const PreparedStatement = struct {
     
     /// Execute the prepared statement with bound parameters
     pub fn execute(self: *Self, connection: anytype) !ExecutionResult {
-        const start_time = std.time.microTimestamp();
+        const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const start_time: i64 = @intCast(@divTrunc((@as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec), 1000));
         defer {
-            const end_time = std.time.microTimestamp();
+            const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            const end_time: i64 = @intCast(@divTrunc((@as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec), 1000));
             self.total_execution_time_us += @intCast(end_time - start_time);
             self.execution_count += 1;
         }
-        
+
         // Check cache first for SELECT statements
         if (self.isSelectStatement() and self.cache != null) {
             if (self.cache.?.get(self.sql_hash)) |cached_result| {
+                const ts_cached = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                const cached_time: i64 = @intCast(@divTrunc((@as(i128, ts_cached.sec) * std.time.ns_per_s + ts_cached.nsec), 1000));
                 return ExecutionResult{
                     .rows = try self.cloneRows(cached_result.rows),
                     .affected_rows = 0,
-                    .execution_time_us = @intCast(std.time.microTimestamp() - start_time),
+                    .execution_time_us = @intCast(cached_time - start_time),
                     .was_cached = true,
                 };
             }
         }
-        
+
         // Use execution plan if available
         var result = if (self.execution_plan) |plan|
             try self.executeWithPlan(plan, connection)
         else
             try self.executeStatement(connection);
-        
-        result.execution_time_us = @intCast(std.time.microTimestamp() - start_time);
-        
+
+        const ts_result = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const result_time: i64 = @intCast(@divTrunc((@as(i128, ts_result.sec) * std.time.ns_per_s + ts_result.nsec), 1000));
+        result.execution_time_us = @intCast(result_time - start_time);
+
         // Cache SELECT results
         if (self.isSelectStatement() and self.cache != null and result.rows.len > 0) {
             self.cache.?.put(self.sql_hash, self.sql, result.rows) catch |err| {
@@ -93,7 +99,7 @@ pub const PreparedStatement = struct {
                 std.debug.print("Cache error: {}\n", .{err});
             };
         }
-        
+
         return result;
     }
     
