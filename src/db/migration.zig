@@ -5,8 +5,8 @@ const Connection = @import("connection.zig").Connection;
 pub const Migration = struct {
     version: u32,
     name: []const u8,
-    up: []const u8,    // SQL to apply migration
-    down: []const u8,  // SQL to rollback migration
+    up: []const u8, // SQL to apply migration
+    down: []const u8, // SQL to rollback migration
 
     /// Metadata for tracking migration history
     pub const MetaData = struct {
@@ -63,7 +63,7 @@ pub const MigrationManager = struct {
         while (i > 0) {
             i -= 1;
             const migration = self.migrations[i];
-            
+
             if (migration.version > target_version and migration.version <= current_version) {
                 try self.rollbackMigration(migration);
             }
@@ -206,20 +206,15 @@ pub fn createMigration(version: u32, name: []const u8, up_sql: []const u8, down_
 
 // Example usage and tests
 test "migration creation" {
-    const migration = createMigration(
-        1,
-        "create_users_table",
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "DROP TABLE users"
-    );
-    
+    const migration = createMigration(1, "create_users_table", "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", "DROP TABLE users");
+
     try std.testing.expectEqual(@as(u32, 1), migration.version);
     try std.testing.expectEqualStrings("create_users_table", migration.name);
 }
 
 test "migration manager initialization" {
     const allocator = std.testing.allocator;
-    
+
     const migrations = [_]Migration{
         createMigration(1, "test", "CREATE TABLE test (id INTEGER)", "DROP TABLE test"),
     };

@@ -14,11 +14,11 @@ const FutureCombinators = struct {
     pub fn race(comptime T: type, futures: []zsync.Future(T)) !T {
         return zsync.race(T, futures);
     }
-    
+
     pub fn all(comptime T: type, futures: []zsync.Future(T)) ![]T {
         return zsync.all(T, futures);
     }
-    
+
     pub fn timeout(comptime T: type, future: zsync.Future(T), ms: u64) !T {
         return zsync.timeout(T, future, ms);
     }
@@ -37,13 +37,13 @@ pub const AsyncDatabase = struct {
 
     pub fn init(allocator: std.mem.Allocator, db_path: []const u8, pool_size: u32) !Self {
         const connection_pool = try ConnectionPool.init(allocator, db_path, pool_size);
-        
+
         // Auto-detect best runtime (io_uring on Linux if available)
         const runtime = zsync.Runtime.autoDetect(.{
             .thread_pool_size = @intCast(pool_size),
             .io_uring_config = if (std.builtin.os.tag == .linux) IoUringConfig{} else null,
         });
-        
+
         return Self{
             .allocator = allocator,
             .connection_pool = connection_pool,
@@ -57,7 +57,7 @@ pub const AsyncDatabase = struct {
     pub fn executeAsync(self: *Self, sql: []const u8) !QueryResult {
         return self.executeAsyncWithTimeout(sql, self.query_timeout_ms);
     }
-    
+
     /// Execute SQL asynchronously with custom timeout
     pub fn executeAsyncWithTimeout(self: *Self, sql: []const u8, timeout_ms: u64) !QueryResult {
         const future = zsync.spawn(executeSqlWorker, .{ self, sql });
@@ -76,26 +76,26 @@ pub const AsyncDatabase = struct {
     pub fn batchExecuteAsync(self: *Self, queries: [][]const u8) ![]QueryResult {
         return self.batchExecuteAsyncWithTimeout(queries, self.query_timeout_ms);
     }
-    
+
     /// Vectorized batch execution with zsync channels for high throughput
     pub fn batchExecuteAsyncWithTimeout(self: *Self, queries: [][]const u8, timeout_ms: u64) ![]QueryResult {
         if (queries.len == 0) return &[_]QueryResult{};
-        
+
         // Create futures for all queries
         var futures = try self.allocator.alloc(zsync.Future(QueryResult), queries.len);
         defer self.allocator.free(futures);
-        
+
         for (queries, 0..) |query, i| {
             futures[i] = zsync.spawn(executeSqlWorker, .{ self, query });
         }
-        
+
         // Wait for all queries to complete or timeout
         const all_future = zsync.spawn(struct {
             fn waitAll(fs: []zsync.Future(QueryResult)) ![]QueryResult {
                 return FutureCombinators.all(QueryResult, fs);
             }
         }.waitAll, .{futures});
-        
+
         return FutureCombinators.timeout([]QueryResult, all_future, timeout_ms) catch |err| switch (err) {
             error.Timeout => blk: {
                 const results = try self.allocator.alloc(QueryResult, queries.len);
@@ -126,20 +126,20 @@ pub const AsyncDatabase = struct {
             else => err,
         };
     }
-    
+
     /// Bulk insert optimization using zsync channels
     pub fn bulkInsertAsync(self: *Self, table_name: []const u8, rows: []storage.Row) !QueryResult {
         if (rows.len == 0) return QueryResult{ .rows = &[_]storage.Row{}, .affected_rows = 0, .success = true, .error_message = null };
-        
+
         // Create channel for coordinating bulk insert
         const channel = try zsync.bounded(storage.Row, self.allocator, @intCast(rows.len));
         defer channel.deinit();
-        
+
         // Send all rows to channel
         for (rows) |row| {
             try channel.send(row);
         }
-        
+
         const future = zsync.spawn(bulkInsertWorker, .{ self, table_name, channel, rows.len });
         return FutureCombinators.timeout(QueryResult, future, self.query_timeout_ms) catch |err| switch (err) {
             error.Timeout => QueryResult{
@@ -154,14 +154,14 @@ pub const AsyncDatabase = struct {
 
     fn executeSqlWorker(self: *AsyncDatabase, sql: []const u8) !QueryResult {
         defer zsync.yieldNow();
-        
+
         const conn = try self.connection_pool.acquire();
         defer self.connection_pool.release(conn);
-        
+
         // Parse and execute SQL
         const parser = @import("../parser/parser.zig");
         const vm = @import("../executor/vm.zig");
-        
+
         var parsed = parser.parse(self.allocator, sql) catch |err| {
             const error_msg = try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
             return QueryResult{
@@ -172,10 +172,10 @@ pub const AsyncDatabase = struct {
             };
         };
         defer parsed.deinit(self.allocator);
-        
+
         var virtual_machine = vm.VirtualMachine.init(self.allocator, conn);
         var planner = @import("../executor/planner.zig").Planner.init(self.allocator);
-        
+
         var plan = planner.plan(&parsed) catch |err| {
             const error_msg = try std.fmt.allocPrint(self.allocator, "Planning error: {}", .{err});
             return QueryResult{
@@ -186,7 +186,7 @@ pub const AsyncDatabase = struct {
             };
         };
         defer plan.deinit();
-        
+
         var result = virtual_machine.execute(&plan) catch |err| {
             const error_msg = try std.fmt.allocPrint(self.allocator, "Execution error: {}", .{err});
             return QueryResult{
@@ -196,7 +196,7 @@ pub const AsyncDatabase = struct {
                 .error_message = error_msg,
             };
         };
-        
+
         // Convert ExecutionResult to QueryResult
         var rows = try self.allocator.alloc(storage.Row, result.rows.items.len);
         for (result.rows.items, 0..) |src_row, i| {
@@ -207,9 +207,9 @@ pub const AsyncDatabase = struct {
             }
             rows[i] = storage.Row{ .values = values };
         }
-        
+
         result.deinit(self.allocator);
-        
+
         return QueryResult{
             .rows = rows,
             .affected_rows = result.affected_rows,
@@ -217,7 +217,7 @@ pub const AsyncDatabase = struct {
             .error_message = null,
         };
     }
-    
+
     fn cloneValue(allocator: std.mem.Allocator, value: storage.Value) !storage.Value {
         return switch (value) {
             .Integer => |i| storage.Value{ .Integer = i },
@@ -231,29 +231,29 @@ pub const AsyncDatabase = struct {
 
     fn bulkInsertWorker(self: *AsyncDatabase, table_name: []const u8, channel: zsync.Channel(storage.Row), row_count: usize) !QueryResult {
         defer zsync.yieldNow();
-        
+
         const conn = try self.connection_pool.acquire();
         defer self.connection_pool.release(conn);
-        
+
         var affected_rows: u64 = 0;
         var batch_size: usize = 0;
         const max_batch_size = 1000; // Process in batches of 1000
-        
+
         var batch = try self.allocator.alloc(storage.Row, max_batch_size);
         defer self.allocator.free(batch);
-        
+
         while (batch_size < row_count) {
             const current_batch_size = @min(max_batch_size, row_count - batch_size);
-            
+
             // Receive batch of rows from channel
             for (0..current_batch_size) |i| {
                 batch[i] = try channel.receive();
             }
-            
+
             // Execute batch insert
             const sql = try std.fmt.allocPrint(self.allocator, "INSERT INTO {s} VALUES ", .{table_name});
             defer self.allocator.free(sql);
-            
+
             // Use prepared statement for better performance
             // This is a simplified version - real implementation would use proper prepared statements
             var values_str: std.ArrayList(u8) = .{};
@@ -286,13 +286,13 @@ pub const AsyncDatabase = struct {
                 }
                 try values_str.appendSlice(self.allocator, ")");
             }
-            
+
             const full_sql = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ sql, values_str.items });
             defer self.allocator.free(full_sql);
-            
+
             const result = try self.executeSqlWorker(full_sql);
             defer result.deinit(self.allocator);
-            
+
             if (!result.success) {
                 return QueryResult{
                     .rows = &[_]storage.Row{},
@@ -301,14 +301,14 @@ pub const AsyncDatabase = struct {
                     .error_message = result.error_message,
                 };
             }
-            
+
             affected_rows += result.affected_rows;
             batch_size += current_batch_size;
-            
+
             // Yield after each batch to allow other tasks
             zsync.yieldNow();
         }
-        
+
         return QueryResult{
             .rows = &[_]storage.Row{},
             .affected_rows = affected_rows,
@@ -319,21 +319,21 @@ pub const AsyncDatabase = struct {
 
     fn transactionWorker(self: *AsyncDatabase, queries: [][]const u8) !QueryResult {
         defer zsync.yieldNow();
-        
+
         const conn = try self.connection_pool.acquire();
         defer self.connection_pool.release(conn);
-        
+
         // Begin transaction
         try conn.beginTransaction();
-        
+
         var total_affected: u32 = 0;
         errdefer conn.rollbackTransaction() catch {};
-        
+
         // Execute all queries in transaction
         for (queries) |query| {
             const result = try self.executeSqlWorker(query);
             defer result.deinit(self.allocator);
-            
+
             if (!result.success) {
                 try conn.rollbackTransaction();
                 return QueryResult{
@@ -343,13 +343,13 @@ pub const AsyncDatabase = struct {
                     .error_message = result.error_message,
                 };
             }
-            
+
             total_affected += result.affected_rows;
         }
-        
+
         // Commit transaction
         try conn.commitTransaction();
-        
+
         return QueryResult{
             .rows = &[_]storage.Row{},
             .affected_rows = total_affected,
@@ -434,13 +434,13 @@ const ConnectionPool = struct {
                 break;
             }
         }
-        
+
         if (conn_index) |index| {
             const conn = self.connections.swapRemove(index);
             _ = self.connection_health.swapRemove(index);
             return conn;
         }
-        
+
         // If no healthy connections, try to repair one
         if (self.connections.items.len > 0) {
             const conn = self.connections.pop();
@@ -450,7 +450,7 @@ const ConnectionPool = struct {
                 return conn;
             }
         }
-        
+
         return error.NoHealthyConnections;
     }
 
@@ -470,12 +470,12 @@ const ConnectionPool = struct {
 
         self.available.post();
     }
-    
+
     /// Mark connection as unhealthy due to error
     pub fn markConnectionError(self: *Self, conn: *connection.Connection) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         for (self.connection_health.items) |*health| {
             if (health.connection == conn) {
                 health.error_count += 1;
@@ -486,7 +486,7 @@ const ConnectionPool = struct {
             }
         }
     }
-    
+
     /// Perform health check on connections
     fn performHealthCheck(self: *Self) !void {
         const current_time = getMilliTimestamp();
@@ -511,17 +511,17 @@ const ConnectionPool = struct {
             }
         }
     }
-    
+
     /// Attempt to repair a connection
     fn repairConnection(self: *Self, conn: *connection.Connection) bool {
         _ = self; // Remove unused variable warning
-        
+
         // Simple health check - execute a basic query
         const test_sql = "SELECT 1";
         conn.execute(test_sql) catch {
             return false;
         };
-        
+
         return true;
     }
 
@@ -579,40 +579,36 @@ pub const AIAgentDatabase = struct {
     pub fn storeAgentCredentials(self: *Self, agent_id: []const u8, credentials: []const u8) !void {
         const encrypted = try self.crypto.encrypt(credentials);
         defer self.crypto.allocator.free(encrypted);
-        
-        const sql = try std.fmt.allocPrint(self.async_db.allocator, 
-            "INSERT INTO agent_credentials (agent_id, encrypted_data) VALUES ('{}', '{}')", 
-            .{ agent_id, std.fmt.fmtSliceHexLower(encrypted) });
+
+        const sql = try std.fmt.allocPrint(self.async_db.allocator, "INSERT INTO agent_credentials (agent_id, encrypted_data) VALUES ('{}', '{}')", .{ agent_id, std.fmt.fmtSliceHexLower(encrypted) });
         defer self.async_db.allocator.free(sql);
-        
+
         _ = try self.async_db.executeAsync(sql);
     }
 
     /// Retrieve and decrypt AI agent credentials
     pub fn getAgentCredentials(self: *Self, agent_id: []const u8) ![]u8 {
-        const sql = try std.fmt.allocPrint(self.async_db.allocator, 
-            "SELECT encrypted_data FROM agent_credentials WHERE agent_id = '{}'", 
-            .{agent_id});
+        const sql = try std.fmt.allocPrint(self.async_db.allocator, "SELECT encrypted_data FROM agent_credentials WHERE agent_id = '{}'", .{agent_id});
         defer self.async_db.allocator.free(sql);
-        
+
         const result = try self.async_db.executeAsync(sql);
         defer result.deinit(self.async_db.allocator);
-        
+
         if (!result.success) {
             return error.QueryFailed;
         }
-        
+
         if (result.rows.len == 0) {
             return error.AgentNotFound;
         }
-        
+
         // Get encrypted data from first row, first column
         const encrypted_data = switch (result.rows[0].values[0]) {
             .Text => |t| t,
             .Blob => |b| b,
             else => return error.InvalidData,
         };
-        
+
         // Decrypt the data
         return try self.crypto.decrypt(encrypted_data);
     }

@@ -28,7 +28,7 @@ pub const EnhancedErrorReporting = struct {
     pub fn reportError(self: *Self, error_type: ErrorType, context: ErrorContext) !ErrorReport {
         const timestamp = getMilliTimestamp();
         const stack_trace = try self.captureStackTrace();
-        
+
         const report = ErrorReport{
             .id = self.generateErrorId(),
             .error_type = error_type,
@@ -38,21 +38,21 @@ pub const EnhancedErrorReporting = struct {
             .suggestions = try self.generateSuggestions(error_type, context),
             .severity = self.determineSeverity(error_type),
         };
-        
+
         try self.addToHistory(report);
-        
+
         return report;
     }
-    
+
     /// Get formatted error message
     pub fn formatError(self: *Self, report: ErrorReport) ![]u8 {
         var message = std.ArrayList(u8){};
-        
+
         // Header
         try message.writer().print("🚨 zqlite Error #{} [{}]\n", .{ report.id, @tagName(report.severity) });
         try message.writer().print("⏰ Time: {}\n", .{report.timestamp});
         try message.writer().print("📋 Type: {}\n\n", .{@tagName(report.error_type)});
-        
+
         // Main error message
         switch (report.error_type) {
             .ParseError => |parse_err| {
@@ -106,7 +106,7 @@ pub const EnhancedErrorReporting = struct {
                 }
             },
         }
-        
+
         // Context information
         if (report.context.user_id) |user| {
             try message.writer().print("\n👤 User: {s}\n", .{user});
@@ -117,7 +117,7 @@ pub const EnhancedErrorReporting = struct {
         if (report.context.session_id) |session| {
             try message.writer().print("📱 Session: {s}\n", .{session});
         }
-        
+
         // Stack trace (abbreviated)
         if (report.stack_trace.len > 0) {
             try message.appendSlice("\n📚 Stack Trace (top 5):\n");
@@ -129,7 +129,7 @@ pub const EnhancedErrorReporting = struct {
                 try message.writer().print("   ... and {} more frames\n", .{report.stack_trace.len - 5});
             }
         }
-        
+
         // Suggestions
         if (report.suggestions.len > 0) {
             try message.appendSlice("\n💡 Suggestions:\n");
@@ -137,7 +137,7 @@ pub const EnhancedErrorReporting = struct {
                 try message.writer().print("   {}. {s}\n", .{ i + 1, suggestion });
             }
         }
-        
+
         // Related errors
         const related = try self.findRelatedErrors(report);
         if (related.len > 0) {
@@ -148,31 +148,31 @@ pub const EnhancedErrorReporting = struct {
             }
             try message.appendSlice("\n");
         }
-        
+
         return try message.toOwnedSlice();
     }
-    
+
     /// Get error statistics
     pub fn getErrorStats(self: *Self, time_window_ms: i64) ErrorStats {
         const current_time = getMilliTimestamp();
         const cutoff_time = current_time - time_window_ms;
-        
+
         var stats = ErrorStats{};
         var error_type_counts = std.enums.EnumArray(ErrorType, u32).initFill(0);
         var severity_counts = std.enums.EnumArray(ErrorSeverity, u32).initFill(0);
-        
+
         for (self.error_history.items) |report| {
             if (report.timestamp >= cutoff_time) {
                 stats.total_errors += 1;
                 error_type_counts.set(report.error_type, error_type_counts.get(report.error_type) + 1);
                 severity_counts.set(report.severity, severity_counts.get(report.severity) + 1);
-                
+
                 // Track most frequent error
                 const current_count = error_type_counts.get(report.error_type);
                 if (current_count > error_type_counts.get(stats.most_frequent_error_type)) {
                     stats.most_frequent_error_type = report.error_type;
                 }
-                
+
                 // Track latest error
                 if (report.timestamp > stats.latest_error_timestamp) {
                     stats.latest_error_timestamp = report.timestamp;
@@ -180,20 +180,20 @@ pub const EnhancedErrorReporting = struct {
                 }
             }
         }
-        
+
         stats.critical_errors = severity_counts.get(.Critical);
         stats.error_rate_per_minute = @as(f64, @floatFromInt(stats.total_errors)) / (@as(f64, @floatFromInt(time_window_ms)) / 60000.0);
-        
+
         return stats;
     }
-    
+
     /// Clear old errors from history
     pub fn clearOldErrors(self: *Self, max_age_ms: i64) !void {
         const current_time = getMilliTimestamp();
         const cutoff_time = current_time - max_age_ms;
-        
+
         var new_history = std.ArrayList(ErrorReport){};
-        
+
         for (self.error_history.items) |report| {
             if (report.timestamp >= cutoff_time) {
                 try new_history.append(report);
@@ -202,38 +202,38 @@ pub const EnhancedErrorReporting = struct {
                 self.freeErrorReport(report);
             }
         }
-        
+
         self.error_history.deinit();
         self.error_history = new_history;
     }
-    
+
     // Helper functions
     fn captureStackTrace(self: *Self) ![]StackFrame {
         // Simplified stack trace capture - in production, use debug info
         var frames = std.ArrayList(StackFrame){};
-        
+
         // Capture current function information
         try frames.append(StackFrame{
             .function_name = try self.allocator.dupe(u8, "zqlite_operation"),
             .file_name = try self.allocator.dupe(u8, "unknown.zig"),
             .line_number = 0,
         });
-        
+
         return try frames.toOwnedSlice();
     }
-    
+
     fn generateErrorId(self: *Self) u64 {
         _ = self; // Remove unused variable warning
         const timestamp = @as(u64, @intCast(getMilliTimestamp()));
         const random = std.crypto.random.int(u32);
         return (timestamp << 32) | random;
     }
-    
+
     fn generateSuggestions(self: *Self, error_type: ErrorType, context: ErrorContext) ![][]u8 {
         _ = context; // Remove unused variable warning
-        
+
         var suggestions = std.ArrayList([]u8){};
-        
+
         switch (error_type) {
             .ParseError => {
                 try suggestions.append(try self.allocator.dupe(u8, "Check your SQL syntax for typos or missing keywords"));
@@ -266,13 +266,13 @@ pub const EnhancedErrorReporting = struct {
                 try suggestions.append(try self.allocator.dupe(u8, "Consider breaking large operations into smaller chunks"));
             },
         }
-        
+
         return try suggestions.toOwnedSlice();
     }
-    
+
     fn determineSeverity(self: *Self, error_type: ErrorType) ErrorSeverity {
         _ = self; // Remove unused variable warning
-        
+
         return switch (error_type) {
             .ParseError => .Warning,
             .DatabaseError => .Error,
@@ -282,58 +282,59 @@ pub const EnhancedErrorReporting = struct {
             .AsyncError => .Error,
         };
     }
-    
+
     fn formatSQLWithHighlight(self: *Self, message: *std.ArrayList(u8), sql: []const u8, error_position: usize) !void {
         _ = self; // Remove unused variable warning
-        
+
         const context_size = 20;
         const start_pos = if (error_position > context_size) error_position - context_size else 0;
         const end_pos = @min(error_position + context_size, sql.len);
-        
+
         // Before error position
         try message.appendSlice(sql[start_pos..error_position]);
-        
+
         // Highlight error position
         try message.appendSlice(" >>> ");
         if (error_position < sql.len) {
             try message.append(sql[error_position]);
         }
         try message.appendSlice(" <<< ");
-        
+
         // After error position
         if (error_position + 1 < end_pos) {
-            try message.appendSlice(sql[error_position + 1..end_pos]);
+            try message.appendSlice(sql[error_position + 1 .. end_pos]);
         }
-        
+
         try message.appendSlice("\n");
     }
-    
+
     fn addToHistory(self: *Self, report: ErrorReport) !void {
         try self.error_history.append(report);
-        
+
         // Trim history if it exceeds max size
         while (self.error_history.items.len > self.max_history_size) {
             const old_report = self.error_history.orderedRemove(0);
             self.freeErrorReport(old_report);
         }
     }
-    
+
     fn findRelatedErrors(self: *Self, report: ErrorReport) ![]u64 {
         var related = std.ArrayList(u64){};
         const time_window = 300000; // 5 minutes
-        
+
         for (self.error_history.items) |other_report| {
-            if (other_report.id != report.id and 
+            if (other_report.id != report.id and
                 @abs(other_report.timestamp - report.timestamp) < time_window and
-                std.meta.activeTag(other_report.error_type) == std.meta.activeTag(report.error_type)) {
+                std.meta.activeTag(other_report.error_type) == std.meta.activeTag(report.error_type))
+            {
                 try related.append(other_report.id);
                 if (related.items.len >= 3) break; // Limit to 3 related errors
             }
         }
-        
+
         return try related.toOwnedSlice();
     }
-    
+
     fn freeErrorReport(self: *Self, report: ErrorReport) void {
         // Free allocated memory in error report
         for (report.stack_trace) |frame| {
@@ -341,12 +342,12 @@ pub const EnhancedErrorReporting = struct {
             self.allocator.free(frame.file_name);
         }
         self.allocator.free(report.stack_trace);
-        
+
         for (report.suggestions) |suggestion| {
             self.allocator.free(suggestion);
         }
         self.allocator.free(report.suggestions);
-        
+
         switch (report.error_type) {
             .ParseError => |parse_err| {
                 self.allocator.free(parse_err.expected);
@@ -385,7 +386,7 @@ pub const EnhancedErrorReporting = struct {
             },
         }
     }
-    
+
     pub fn deinit(self: *Self) void {
         for (self.error_history.items) |report| {
             self.freeErrorReport(report);

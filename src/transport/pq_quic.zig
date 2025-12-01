@@ -58,7 +58,7 @@ pub const PQQuicTransport = struct {
         /// Derive initial keys from connection ID (RFC 9001)
         pub fn deriveInitialKeys(self: *QuicCrypto, connection_id: []const u8) !void {
             _ = connection_id; // TODO: Use connection_id for proper key derivation
-            
+
             // For now, using placeholder keys
             // In production, this should derive keys from connection_id
             const client_secret_buf: [32]u8 = std.mem.zeroes([32]u8);
@@ -71,18 +71,18 @@ pub const PQQuicTransport = struct {
         /// Derive packet keys from secret
         fn derivePacketKeys(self: *QuicCrypto, secret: [32]u8) !PacketKeys {
             _ = self;
-            
+
             // Use std.crypto HKDF for key derivation
             const Hkdf = std.crypto.kdf.hkdf.HkdfSha256;
             const salt = "";
             const prk = Hkdf.extract(salt, &secret);
-            
+
             var aead_key: [32]u8 = undefined;
             Hkdf.expand(&aead_key, "quic key", prk);
-            
+
             var iv_buf: [12]u8 = undefined;
             Hkdf.expand(&iv_buf, "quic iv", prk);
-            
+
             var hp_key: [32]u8 = undefined;
             Hkdf.expand(&hp_key, "quic hp", prk);
 
@@ -265,7 +265,7 @@ pub const PQQuicTransport = struct {
             var peer_classical: [32]u8 = undefined;
             var peer_pq: [1088]u8 = undefined; // ML-KEM-768 ciphertext placeholder
             var shared_secret: [64]u8 = undefined;
-            
+
             std.crypto.random.bytes(&peer_classical);
             std.crypto.random.bytes(&peer_pq);
             std.crypto.random.bytes(&shared_secret);
@@ -353,7 +353,7 @@ pub const PQQuicTransport = struct {
             }
             allocator.destroy(self);
         }
-        
+
         /// Securely zero memory to prevent sensitive data from remaining
         fn secureZero(buffer: []u8) void {
             @memset(buffer, 0);
@@ -487,7 +487,7 @@ pub const PQQuicTransport = struct {
     pub fn enableZeroRTT(self: *Self, psk: []const u8) !void {
         _ = self;
         if (psk.len < 64) return error.InvalidPSKLength;
-        
+
         // Generate quantum-safe 0-RTT keys
         const classical_psk = psk[0..32];
         const pq_psk = psk[32..64];
@@ -496,14 +496,14 @@ pub const PQQuicTransport = struct {
         var combined_key: [64]u8 = undefined;
         @memcpy(combined_key[0..32], classical_psk);
         @memcpy(combined_key[32..64], pq_psk);
-        
+
         // Hash the combined key for 0-RTT protection
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         hasher.update(&combined_key);
         hasher.update("0rtt_data");
         var protection_key: [32]u8 = undefined;
         hasher.final(&protection_key);
-        
+
         // Store protection key for later use (stub implementation)
         // In a real implementation, this would be used to protect 0-RTT data
         // Clear protection key securely

@@ -536,13 +536,13 @@ pub fn main() !void {
         .access_level = .read_only,
         .granted_by = alice.user_id,
         .granted_at = blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk ts.sec;
-            },
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            break :blk ts.sec;
+        },
         .expires_at = blk: {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        break :blk ts.sec + (24 * 60 * 60);
-    }, // 24 hours
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            break :blk ts.sec + (24 * 60 * 60);
+        }, // 24 hours
     };
     try storage.grantFilePermission(&permission);
 

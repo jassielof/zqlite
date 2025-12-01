@@ -85,12 +85,12 @@ pub const StorageEngine = struct {
         var table_names = try allocator.alloc([]const u8, self.tables.count());
         var iterator = self.tables.iterator();
         var index: usize = 0;
-        
+
         while (iterator.next()) |entry| {
             table_names[index] = try allocator.dupe(u8, entry.key_ptr.*);
             index += 1;
         }
-        
+
         return table_names;
     }
 
@@ -258,7 +258,7 @@ pub const Column = struct {
     is_primary_key: bool,
     is_nullable: bool,
     default_value: ?DefaultValue,
-    
+
     pub const DefaultValue = union(enum) {
         Literal: Value,
         FunctionCall: FunctionCall,
@@ -277,11 +277,11 @@ pub const Column = struct {
             };
         }
     };
-    
+
     pub const FunctionCall = struct {
         name: []const u8,
         arguments: []FunctionArgument,
-        
+
         pub fn deinit(self: FunctionCall, allocator: std.mem.Allocator) void {
             allocator.free(self.name);
             for (self.arguments) |arg| {
@@ -304,12 +304,12 @@ pub const Column = struct {
             };
         }
     };
-    
+
     pub const FunctionArgument = union(enum) {
         Literal: Value,
         Column: []const u8,
         Parameter: u32,
-        
+
         pub fn deinit(self: FunctionArgument, allocator: std.mem.Allocator) void {
             switch (self) {
                 .Literal => |value| value.deinit(allocator),
@@ -438,7 +438,7 @@ pub const Value = union(enum) {
                 .scale = numeric.scale,
                 .digits = try allocator.dupe(u8, numeric.digits),
                 .is_negative = numeric.is_negative,
-            } }
+            } },
         };
     }
 };
@@ -446,21 +446,21 @@ pub const Value = union(enum) {
 /// JSONB value with parsed structure
 pub const JSONBValue = struct {
     parsed: std.json.Parsed(std.json.Value),
-    
+
     pub fn init(allocator: std.mem.Allocator, json_text: []const u8) !JSONBValue {
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_text, .{});
         return JSONBValue{ .parsed = parsed };
     }
-    
+
     pub fn deinit(self: JSONBValue, allocator: std.mem.Allocator) void {
         _ = allocator;
         self.parsed.deinit();
     }
-    
+
     pub fn toString(self: JSONBValue, allocator: std.mem.Allocator) ![]u8 {
         return try self.stringifyJson(allocator);
     }
-    
+
     /// Convert parsed JSON back to string representation
     pub fn stringifyJson(self: JSONBValue, allocator: std.mem.Allocator) ![]u8 {
         return switch (self.parsed.value) {
@@ -473,7 +473,7 @@ pub const JSONBValue = struct {
             .array => |arr| blk: {
                 var result = std.ArrayList(u8){};
                 defer result.deinit(allocator);
-                
+
                 try result.append(allocator, '[');
                 for (arr.items, 0..) |item, i| {
                     if (i > 0) try result.appendSlice(allocator, ", ");
@@ -488,7 +488,7 @@ pub const JSONBValue = struct {
             .object => |obj| blk: {
                 var result = std.ArrayList(u8){};
                 defer result.deinit(allocator);
-                
+
                 try result.append(allocator, '{');
                 var first = true;
                 var iterator = obj.iterator();
@@ -498,7 +498,7 @@ pub const JSONBValue = struct {
                     try result.appendSlice(allocator, "\"");
                     try result.appendSlice(allocator, entry.key_ptr.*);
                     try result.appendSlice(allocator, "\": ");
-                    
+
                     const value_json = JSONBValue{ .parsed = std.json.Parsed(std.json.Value){ .value = entry.value_ptr.*, .arena = undefined } };
                     const value_str = try value_json.stringifyJson(allocator);
                     defer allocator.free(value_str);
@@ -509,15 +509,15 @@ pub const JSONBValue = struct {
             },
         };
     }
-    
+
     /// Extract a value from JSON using a path (PostgreSQL -> operator)
     pub fn extractPath(self: JSONBValue, allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
         const value = self.extractValue(path) orelse return null;
         const json_value = JSONBValue{ .parsed = std.json.Parsed(std.json.Value){ .value = value, .arena = undefined } };
         return try json_value.stringifyJson(allocator);
     }
-    
-    /// Extract a text value from JSON (PostgreSQL ->> operator)  
+
+    /// Extract a text value from JSON (PostgreSQL ->> operator)
     pub fn extractText(self: JSONBValue, allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
         const value = self.extractValue(path) orelse return null;
         return switch (value) {
@@ -533,7 +533,7 @@ pub const JSONBValue = struct {
             },
         };
     }
-    
+
     /// Check if JSON contains a key (PostgreSQL ? operator)
     pub fn hasKey(self: JSONBValue, key: []const u8) bool {
         return switch (self.parsed.value) {
@@ -541,7 +541,7 @@ pub const JSONBValue = struct {
             else => false,
         };
     }
-    
+
     /// Extract raw JSON value for path operations
     fn extractValue(self: JSONBValue, path: []const u8) ?std.json.Value {
         return switch (self.parsed.value) {
@@ -560,59 +560,59 @@ pub const JSONBValue = struct {
 pub const ArrayValue = struct {
     element_type: DataType,
     elements: []Value,
-    
+
     pub fn deinit(self: ArrayValue, allocator: std.mem.Allocator) void {
         for (self.elements) |element| {
             element.deinit(allocator);
         }
         allocator.free(self.elements);
     }
-    
+
     /// Create array from values
     pub fn init(allocator: std.mem.Allocator, element_type: DataType, values: []const Value) CloneValueError!ArrayValue {
         var elements = try allocator.alloc(Value, values.len);
-        
+
         // Clone each value
         for (values, 0..) |value, i| {
             elements[i] = try cloneValue(allocator, value);
         }
-        
+
         return ArrayValue{
             .element_type = element_type,
             .elements = elements,
         };
     }
-    
+
     /// Get array length
     pub fn len(self: ArrayValue) usize {
         return self.elements.len;
     }
-    
+
     /// Get element at index (1-based like PostgreSQL)
     pub fn get(self: ArrayValue, index: usize) ?Value {
         if (index == 0 or index > self.elements.len) return null;
         return self.elements[index - 1];
     }
-    
+
     /// Convert array to PostgreSQL format string: {elem1,elem2,elem3}
     pub fn toString(self: ArrayValue, allocator: std.mem.Allocator) ![]u8 {
         var result = std.ArrayList(u8){};
         defer result.deinit(allocator);
-        
+
         try result.append(allocator, '{');
-        
+
         for (self.elements, 0..) |element, i| {
             if (i > 0) try result.appendSlice(allocator, ",");
-            
+
             const elem_str = try valueToString(allocator, element);
             defer allocator.free(elem_str);
             try result.appendSlice(allocator, elem_str);
         }
-        
+
         try result.append(allocator, '}');
         return try result.toOwnedSlice(allocator);
     }
-    
+
     /// Check if array contains value (PostgreSQL @> operator)
     pub fn contains(self: ArrayValue, value: Value) bool {
         for (self.elements) |element| {
@@ -620,7 +620,7 @@ pub const ArrayValue = struct {
         }
         return false;
     }
-    
+
     /// Array overlap (PostgreSQL && operator)
     pub fn overlaps(self: ArrayValue, other: ArrayValue) bool {
         for (self.elements) |element| {
@@ -714,7 +714,7 @@ fn valuesEqual(a: Value, b: Value) bool {
 pub const TimestampTZValue = struct {
     timestamp: i64, // Unix timestamp in microseconds
     timezone: []const u8, // Timezone name (e.g., "UTC", "America/New_York")
-    
+
     pub fn deinit(self: TimestampTZValue, allocator: std.mem.Allocator) void {
         allocator.free(self.timezone);
     }
@@ -726,7 +726,7 @@ pub const NumericValue = struct {
     scale: u16, // Digits after decimal point
     digits: []u8, // BCD encoded digits
     is_negative: bool,
-    
+
     pub fn deinit(self: NumericValue, allocator: std.mem.Allocator) void {
         allocator.free(self.digits);
     }

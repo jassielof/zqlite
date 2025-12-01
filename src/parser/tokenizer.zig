@@ -164,12 +164,12 @@ pub const Tokenizer = struct {
         // Skip the '--'
         self.advance();
         self.advance();
-        
+
         // Skip until end of line or end of input
         while (self.current_char != null and self.current_char.? != '\n') {
             self.advance();
         }
-        
+
         // Skip the newline if present
         if (self.current_char == '\n') {
             self.advance();
@@ -181,7 +181,7 @@ pub const Tokenizer = struct {
         // Skip the '/*'
         self.advance();
         self.advance();
-        
+
         // Skip until we find '*/'
         while (self.current_char != null) {
             if (self.current_char.? == '*') {
@@ -194,7 +194,7 @@ pub const Tokenizer = struct {
                 self.advance();
             }
         }
-        
+
         // If we reach here, the comment was not closed
         return error.UnterminatedComment;
     }

@@ -16,7 +16,7 @@ const LRUCache = struct {
     node_map: std.AutoHashMap(u32, *LRUNode), // Maps page_id to LRU node
     head: ?*LRUNode = null, // Most recently used
     tail: ?*LRUNode = null, // Least recently used
-    
+
     fn init(allocator: std.mem.Allocator, capacity: u32) LRUCache {
         return LRUCache{
             .allocator = allocator,
@@ -25,7 +25,7 @@ const LRUCache = struct {
             .node_map = std.AutoHashMap(u32, *LRUNode).init(allocator),
         };
     }
-    
+
     fn deinit(self: *LRUCache) void {
         // Clean up nodes
         var node_iter = self.node_map.iterator();
@@ -35,79 +35,79 @@ const LRUCache = struct {
         self.node_map.deinit();
         self.page_map.deinit();
     }
-    
+
     fn moveToHead(self: *LRUCache, node: *LRUNode) void {
         if (self.head == node) return; // Already at head
-        
+
         // Remove from current position
         if (node.prev) |prev| {
             prev.next = node.next;
         } else {
             self.tail = node.next; // node was tail
         }
-        
+
         if (node.next) |next| {
             next.prev = node.prev;
         } else {
             self.head = node.prev; // node was head
         }
-        
+
         // Add to head
         node.prev = self.head;
         node.next = null;
-        
+
         if (self.head) |head| {
             head.next = node;
         }
         self.head = node;
-        
+
         if (self.tail == null) {
             self.tail = node;
         }
     }
-    
+
     fn addToHead(self: *LRUCache, node: *LRUNode) void {
         node.prev = self.head;
         node.next = null;
-        
+
         if (self.head) |head| {
             head.next = node;
         }
         self.head = node;
-        
+
         if (self.tail == null) {
             self.tail = node;
         }
     }
-    
+
     fn removeTail(self: *LRUCache) ?*LRUNode {
         const tail = self.tail orelse return null;
-        
+
         if (tail.next) |next| {
             next.prev = tail.prev;
         } else {
             self.head = tail.prev; // tail was head
         }
-        
+
         if (tail.prev) |prev| {
             prev.next = tail.next;
         } else {
             self.tail = tail.next; // tail was tail
         }
-        
+
         return tail;
     }
-    
+
     fn get(self: *LRUCache, page_id: u32) ?*Page {
         const page = self.page_map.get(page_id) orelse return null;
-        
+
         if (self.node_map.get(page_id)) |node| {
             self.moveToHead(node);
         }
-        
+
         return page;
     }
-    
+
     fn put(self: *LRUCache, page_id: u32, page: *Page) !?*Page {
         if (self.page_map.get(page_id)) |existing_page| {
             // Update existing
@@ -117,7 +117,7 @@ const LRUCache = struct {
             }
             return existing_page;
         }
-        
+
         // Check capacity
         var evicted_page: ?*Page = null;
         if (self.page_map.count() >= self.capacity) {
@@ -129,47 +129,47 @@ const LRUCache = struct {
                 self.allocator.destroy(tail_node);
             }
         }
-        
+
         // Add new page
         const new_node = try self.allocator.create(LRUNode);
         new_node.* = LRUNode{ .page_id = page_id };
-        
+
         try self.page_map.put(page_id, page);
         try self.node_map.put(page_id, new_node);
         self.addToHead(new_node);
-        
+
         return evicted_page;
     }
-    
+
     fn remove(self: *LRUCache, page_id: u32) ?*Page {
         const page = self.page_map.fetchRemove(page_id) orelse return null;
-        
+
         if (self.node_map.fetchRemove(page_id)) |entry| {
             const node = entry.value;
-            
+
             // Remove from linked list
             if (node.prev) |prev| {
                 prev.next = node.next;
             } else {
                 self.tail = node.next;
             }
-            
+
             if (node.next) |next| {
                 next.prev = node.prev;
             } else {
                 self.head = node.prev;
             }
-            
+
             self.allocator.destroy(node);
         }
-        
+
         return page.value;
     }
-    
+
     fn count(self: *LRUCache) u32 {
         return @intCast(self.page_map.count());
     }
-    
+
     fn iterator(self: *LRUCache) std.AutoHashMap(u32, *Page).Iterator {
         return self.page_map.iterator();
     }

@@ -14,7 +14,7 @@ pub fn main() !void {
 
     // Test 1: Enhanced table creation with new data types and constraints
     std.debug.print("✅ Creating table with enhanced features...\n", .{});
-    const create_sql = 
+    const create_sql =
         \\CREATE TABLE enhanced_users (
         \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
         \\    name TEXT NOT NULL,
@@ -23,7 +23,7 @@ pub fn main() !void {
         \\    active INTEGER DEFAULT 1
         \\)
     ;
-    
+
     _ = try zqlite.vm.execute(connection, &(try zqlite.parser.parse(allocator, create_sql)).statement);
     std.debug.print("   Table 'enhanced_users' created successfully!\n\n", .{});
 
@@ -58,7 +58,7 @@ pub fn main() !void {
         }
         allocator.free(results);
     }
-    
+
     std.debug.print("   Found {} active users\n\n", .{results.len});
 
     std.debug.print("🎯 ZQLite {s} Features Demonstrated:\n", .{zqlite.version.VERSION_STRING});

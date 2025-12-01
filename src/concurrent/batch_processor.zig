@@ -11,10 +11,10 @@ pub const BatchProcessor = struct {
     batch_size: u32,
     vectorized_ops: VectorizedOperations,
     metrics: BatchMetrics,
-    
+
     const Self = @This();
     const MAX_BATCH_SIZE = 8192;
-    
+
     pub fn init(allocator: std.mem.Allocator, mvcc_manager: *mvcc.MVCCTransactionManager, batch_size: u32) !Self {
         return Self{
             .allocator = allocator,
@@ -24,7 +24,7 @@ pub const BatchProcessor = struct {
             .metrics = BatchMetrics.init(),
         };
     }
-    
+
     /// Process a batch of operations with vectorized optimizations
     pub fn processBatch(self: *Self, operations: []const BatchOperation) !BatchResult {
         const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
@@ -86,32 +86,32 @@ pub const BatchProcessor = struct {
             .throughput_ops_per_sec = @intCast((success_count * 1_000_000) / @max(execution_time, 1)),
         };
     }
-    
+
     /// Process multiple batches concurrently
     pub fn processConcurrentBatches(self: *Self, batches: []const []const BatchOperation) ![]BatchResult {
         var results = try self.allocator.alloc(BatchResult, batches.len);
         var futures = try self.allocator.alloc(zsync.Future(BatchResult), batches.len);
         defer self.allocator.free(futures);
-        
+
         // Start all batches concurrently
         for (batches, 0..) |batch, i| {
             futures[i] = zsync.async(self.processBatch, .{batch});
         }
-        
+
         // Wait for all batches to complete
         for (futures, 0..) |future, i| {
             results[i] = try future.await();
         }
-        
+
         return results;
     }
-    
+
     /// Process insert operations with vectorized optimizations
     fn processInsertBatch(self: *Self, tx_id: mvcc.TransactionId, operations: []const BatchOperation, results: []OperationResult) !void {
         // Pre-allocate memory for batch
         const batch_rows = try self.allocator.alloc(storage.Row, operations.len);
         defer self.allocator.free(batch_rows);
-        
+
         // Vectorized data preparation
         for (operations, 0..) |op, i| {
             if (op.data) |data| {
@@ -124,7 +124,7 @@ pub const BatchProcessor = struct {
                 continue;
             }
         }
-        
+
         // Batch insert with lock-free optimization
         for (operations, 0..) |op, i| {
             const result = self.mvcc_manager.writeRow(tx_id, op.table, op.row_id, batch_rows[i]);
@@ -137,7 +137,7 @@ pub const BatchProcessor = struct {
             };
         }
     }
-    
+
     /// Process update operations with vectorized optimizations
     fn processUpdateBatch(self: *Self, tx_id: mvcc.TransactionId, operations: []const BatchOperation, results: []OperationResult) !void {
         // Vectorized update processing
@@ -160,7 +160,7 @@ pub const BatchProcessor = struct {
             }
         }
     }
-    
+
     /// Process delete operations with vectorized optimizations
     fn processDeleteBatch(self: *Self, tx_id: mvcc.TransactionId, operations: []const BatchOperation, results: []OperationResult) !void {
         // Vectorized delete processing
@@ -175,7 +175,7 @@ pub const BatchProcessor = struct {
             };
         }
     }
-    
+
     /// Process select operations with vectorized optimizations
     fn processSelectBatch(self: *Self, tx_id: mvcc.TransactionId, operations: []const BatchOperation, results: []OperationResult) !void {
         // Vectorized select processing
@@ -204,7 +204,7 @@ pub const BatchProcessor = struct {
             };
         }
     }
-    
+
     /// Serialize a row for transport
     fn serializeRow(self: *Self, row: storage.Row) ![]u8 {
         // Simple serialization - in production this would be more efficient
@@ -221,24 +221,24 @@ pub const BatchProcessor = struct {
 
         return try list.toOwnedSlice(self.allocator);
     }
-    
+
     /// Deserialize a row from transport
     fn deserializeRow(self: *Self, data: []const u8) !storage.Row {
         var stream = std.io.fixedBufferStream(data);
         const reader = stream.reader();
-        
+
         // Read number of values
         const num_values = try reader.readInt(u32, .little);
         const values = try self.allocator.alloc(storage.Value, num_values);
-        
+
         // Read each value
         for (values) |*value| {
             value.* = try self.deserializeValue(reader);
         }
-        
+
         return storage.Row{ .values = values };
     }
-    
+
     /// Serialize a value
     fn serializeValue(self: *Self, writer: anytype, value: storage.Value) !void {
         _ = self;
@@ -270,7 +270,7 @@ pub const BatchProcessor = struct {
             },
         }
     }
-    
+
     /// Deserialize a value
     fn deserializeValue(self: *Self, reader: anytype) !storage.Value {
         const type_tag = try reader.readByte();
@@ -294,12 +294,12 @@ pub const BatchProcessor = struct {
             else => error.InvalidTypeTag,
         };
     }
-    
+
     /// Get batch processing metrics
     pub fn getMetrics(self: *Self) BatchMetrics {
         return self.metrics;
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.vectorized_ops.deinit();
     }
@@ -308,13 +308,13 @@ pub const BatchProcessor = struct {
 /// Vectorized operations for SIMD optimizations
 const VectorizedOperations = struct {
     allocator: std.mem.Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{ .allocator = allocator };
     }
-    
+
     /// Preprocess operations for vectorization
     pub fn preprocess(self: *Self, operations: []const BatchOperation) !VectorizedBatch {
         var groups: std.ArrayList(OperationGroup) = .{};
@@ -355,7 +355,7 @@ const VectorizedOperations = struct {
             .groups = groups,
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         _ = self;
     }
@@ -391,7 +391,7 @@ pub const BatchResult = struct {
     successful_operations: u32,
     execution_time_us: i64,
     throughput_ops_per_sec: u32,
-    
+
     pub fn deinit(self: *BatchResult, allocator: std.mem.Allocator) void {
         for (self.results) |result| {
             if (result.error_message) |msg| {
@@ -408,7 +408,7 @@ pub const BatchResult = struct {
 /// Vectorized batch for processing
 const VectorizedBatch = struct {
     groups: std.ArrayList(OperationGroup),
-    
+
     pub fn deinit(self: *VectorizedBatch, allocator: std.mem.Allocator) void {
         for (self.groups.items) |group| {
             allocator.free(group.operations);
@@ -432,7 +432,7 @@ pub const BatchMetrics = struct {
     total_execution_time_us: u64,
     average_batch_size: f64,
     average_throughput: f64,
-    
+
     pub fn init() BatchMetrics {
         return BatchMetrics{
             .total_batches = 0,
@@ -443,13 +443,13 @@ pub const BatchMetrics = struct {
             .average_throughput = 0.0,
         };
     }
-    
+
     pub fn updateBatchMetrics(self: *BatchMetrics, operations: usize, successful: u32, execution_time: i64) void {
         self.total_batches += 1;
         self.total_operations += operations;
         self.successful_operations += successful;
         self.total_execution_time_us += @intCast(execution_time);
-        
+
         // Update averages
         self.average_batch_size = @as(f64, @floatFromInt(self.total_operations)) / @as(f64, @floatFromInt(self.total_batches));
         if (self.total_execution_time_us > 0) {
@@ -464,39 +464,39 @@ test "batch processor basic operations" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     var storage_engine = try storage.StorageEngine.initMemory(allocator);
     defer storage_engine.deinit();
-    
+
     var mvcc_manager = try mvcc.MVCCTransactionManager.init(allocator, &storage_engine, null);
     defer mvcc_manager.deinit();
-    
+
     var batch_processor = try BatchProcessor.init(allocator, &mvcc_manager, 1000);
     defer batch_processor.deinit();
-    
+
     // Test insert operations
     const operations = [_]BatchOperation{
         BatchOperation{
             .operation_type = .Insert,
             .table = "test_table",
             .row_id = 1,
-            .data = &[_]u8{1, 0, 0, 0, 0, 123, 0, 0, 0, 0, 0, 0, 0}, // Serialized integer 123
+            .data = &[_]u8{ 1, 0, 0, 0, 0, 123, 0, 0, 0, 0, 0, 0, 0 }, // Serialized integer 123
         },
         BatchOperation{
             .operation_type = .Insert,
             .table = "test_table",
             .row_id = 2,
-            .data = &[_]u8{1, 0, 0, 0, 0, 124, 0, 0, 0, 0, 0, 0, 0}, // Serialized integer 124
+            .data = &[_]u8{ 1, 0, 0, 0, 0, 124, 0, 0, 0, 0, 0, 0, 0 }, // Serialized integer 124
         },
     };
-    
+
     const result = try batch_processor.processBatch(&operations);
     defer result.deinit(allocator);
-    
+
     try testing.expect(result.successful_operations == 2);
     try testing.expect(result.total_operations == 2);
     try testing.expect(result.throughput_ops_per_sec > 0);
-    
+
     // Verify metrics
     const metrics = batch_processor.getMetrics();
     try testing.expect(metrics.total_batches == 1);
@@ -508,10 +508,10 @@ test "vectorized batch processing" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     var vectorized_ops = VectorizedOperations.init(allocator);
     defer vectorized_ops.deinit();
-    
+
     // Mixed operations
     const operations = [_]BatchOperation{
         BatchOperation{ .operation_type = .Insert, .table = "test", .row_id = 1, .data = null },
@@ -519,10 +519,10 @@ test "vectorized batch processing" {
         BatchOperation{ .operation_type = .Update, .table = "test", .row_id = 1, .data = null },
         BatchOperation{ .operation_type = .Delete, .table = "test", .row_id = 3, .data = null },
     };
-    
+
     const vectorized_batch = try vectorized_ops.preprocess(&operations);
     defer vectorized_batch.deinit(allocator);
-    
+
     // Should group operations by type
     try testing.expect(vectorized_batch.groups.items.len == 3); // Insert, Update, Delete
     try testing.expect(vectorized_batch.groups.items[0].operations.len == 2); // 2 inserts

@@ -17,9 +17,9 @@ pub const HotStandby = struct {
     failover_manager: FailoverManager,
     sync_state: SyncState,
     metrics: StandbyMetrics,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, mvcc_manager: *mvcc.MVCCTransactionManager, node_id: []const u8) !Self {
         return Self{
             .allocator = allocator,
@@ -34,100 +34,100 @@ pub const HotStandby = struct {
             .metrics = StandbyMetrics.init(),
         };
     }
-    
+
     /// Promote standby to primary (failover)
     pub fn promoteToPrimary(self: *Self) !void {
         if (self.role != .Standby) {
             return error.InvalidRole;
         }
-        
+
         // Ensure we're fully synchronized
         if (self.sync_state.lag_ms > 1000) {
             return error.NotSynchronized;
         }
-        
+
         // Begin failover process
         try self.failover_manager.beginFailover();
-        
+
         // Stop accepting replication
         self.stopReplication();
-        
+
         // Apply any pending log entries
         try self.applyPendingEntries();
-        
+
         // Promote to primary
         self.role = .Primary;
         self.primary_node = null;
-        
+
         // Start accepting writes
         try self.startPrimaryServices();
-        
+
         // Notify other nodes of promotion
         try self.notifyPromotion();
-        
+
         self.metrics.failover_count += 1;
         self.failover_manager.completeFailover();
     }
-    
+
     /// Demote primary to standby (planned failover)
     pub fn demoteToStandby(self: *Self, new_primary: *Node) !void {
         if (self.role != .Primary) {
             return error.InvalidRole;
         }
-        
+
         // Stop accepting new transactions
         try self.stopPrimaryServices();
-        
+
         // Wait for all transactions to complete
         try self.waitForTransactionsToComplete();
-        
+
         // Sync final state to new primary
         try self.syncToNewPrimary(new_primary);
-        
+
         // Demote to standby
         self.role = .Standby;
         self.primary_node = new_primary;
-        
+
         // Start replication from new primary
         try self.startReplication();
-        
+
         self.metrics.planned_failover_count += 1;
     }
-    
+
     /// Start replication from primary
     pub fn startReplication(self: *Self) !void {
         if (self.role != .Standby or self.primary_node == null) {
             return error.InvalidState;
         }
-        
+
         // Start heartbeat monitoring
         try self.heartbeat_manager.startMonitoring(self.primary_node.?);
-        
+
         // Start replication stream
         try self.startReplicationStream();
-        
+
         // Start applying replicated entries
         try self.startApplyingEntries();
     }
-    
+
     /// Stop replication
     pub fn stopReplication(self: *Self) void {
         self.heartbeat_manager.stopMonitoring();
         self.stopReplicationStream();
         self.stopApplyingEntries();
     }
-    
+
     /// Handle incoming replication entry
     pub fn handleReplicationEntry(self: *Self, entry: ReplicationEntry) !void {
         if (self.role != .Standby) {
             return error.InvalidRole;
         }
-        
+
         // Validate entry
         if (!self.validateEntry(entry)) {
             return error.InvalidEntry;
         }
-        
+
         // Add to replication log
         try self.replication_log.append(self.allocator, entry);
 
@@ -138,15 +138,15 @@ pub const HotStandby = struct {
 
         // Apply entry immediately for better performance
         try self.applyEntry(entry);
-        
+
         self.metrics.entries_replicated += 1;
     }
-    
+
     /// Apply replication entry to local state
     fn applyEntry(self: *Self, entry: ReplicationEntry) !void {
         const tx_id = try self.mvcc_manager.beginTransaction(.ReadCommitted);
         defer self.mvcc_manager.abortTransaction(tx_id) catch {};
-        
+
         switch (entry.operation_type) {
             .Insert => {
                 const row = try self.deserializeRow(entry.data);
@@ -170,47 +170,47 @@ pub const HotStandby = struct {
                 try self.dropTable(entry.table);
             },
         }
-        
+
         try self.mvcc_manager.commitTransaction(tx_id);
     }
-    
+
     /// Check if primary is healthy
     pub fn isPrimaryHealthy(self: *Self) bool {
         return self.heartbeat_manager.isPrimaryHealthy();
     }
-    
+
     /// Get replication lag in milliseconds
     pub fn getReplicationLag(self: *Self) u64 {
         return self.sync_state.lag_ms;
     }
-    
+
     /// Get current sync state
     pub fn getSyncState(self: *Self) SyncState {
         return self.sync_state;
     }
-    
+
     /// Get standby metrics
     pub fn getMetrics(self: *Self) StandbyMetrics {
         return self.metrics;
     }
-    
+
     /// Start primary services
     fn startPrimaryServices(self: *Self) !void {
         // Start accepting writes
         // Start heartbeat broadcasting
         try self.heartbeat_manager.startBroadcasting();
-        
+
         // Start replication to standbys
         try self.startReplicatingToStandbys();
     }
-    
+
     /// Stop primary services
     fn stopPrimaryServices(self: *Self) !void {
         // Stop accepting new writes
         self.heartbeat_manager.stopBroadcasting();
         self.stopReplicatingToStandbys();
     }
-    
+
     /// Get current time in milliseconds using POSIX clock
     fn getMilliTimestamp() i64 {
         const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
@@ -236,31 +236,31 @@ pub const HotStandby = struct {
             std.Thread.sleep(100 * std.time.ns_per_ms);
         }
     }
-    
+
     /// Start replication stream
     fn startReplicationStream(self: *Self) !void {
         // Implementation would start network stream from primary
         _ = self;
     }
-    
+
     /// Stop replication stream
     fn stopReplicationStream(self: *Self) void {
         // Implementation would stop network stream
         _ = self;
     }
-    
+
     /// Start applying entries
     fn startApplyingEntries(self: *Self) !void {
         // Implementation would start background thread to apply entries
         _ = self;
     }
-    
+
     /// Stop applying entries
     fn stopApplyingEntries(self: *Self) void {
         // Implementation would stop background thread
         _ = self;
     }
-    
+
     /// Apply pending entries
     fn applyPendingEntries(self: *Self) !void {
         for (self.replication_log.items) |entry| {
@@ -268,42 +268,42 @@ pub const HotStandby = struct {
             try self.applyEntry(entry);
         }
     }
-    
+
     /// Validate replication entry
     fn validateEntry(self: *Self, entry: ReplicationEntry) bool {
         _ = self;
         // Validate entry integrity, sequence, etc.
         return entry.index > 0 and entry.timestamp > 0;
     }
-    
+
     /// Sync to new primary
     fn syncToNewPrimary(self: *Self, new_primary: *Node) !void {
         _ = self;
         _ = new_primary;
         // Implementation would sync final state
     }
-    
+
     /// Notify other nodes of promotion
     fn notifyPromotion(self: *Self) !void {
         for (self.standby_nodes.items) |node| {
             try node.notifyPromotion();
         }
     }
-    
+
     /// Start replicating to standbys
     fn startReplicatingToStandbys(self: *Self) !void {
         for (self.standby_nodes.items) |node| {
             try node.startReplication();
         }
     }
-    
+
     /// Stop replicating to standbys
     fn stopReplicatingToStandbys(self: *Self) void {
         for (self.standby_nodes.items) |node| {
             node.stopReplication();
         }
     }
-    
+
     /// Create table
     fn createTable(self: *Self, table_name: []const u8, data: []const u8) !void {
         _ = self;
@@ -311,29 +311,29 @@ pub const HotStandby = struct {
         _ = data;
         // Implementation would create table
     }
-    
+
     /// Drop table
     fn dropTable(self: *Self, table_name: []const u8) !void {
         _ = self;
         _ = table_name;
         // Implementation would drop table
     }
-    
+
     /// Deserialize row
     fn deserializeRow(self: *Self, data: []const u8) !storage.Row {
         var stream = std.io.fixedBufferStream(data);
         const reader = stream.reader();
-        
+
         const num_values = try reader.readInt(u32, .little);
         const values = try self.allocator.alloc(storage.Value, num_values);
-        
+
         for (values) |*value| {
             value.* = try self.deserializeValue(reader);
         }
-        
+
         return storage.Row{ .values = values };
     }
-    
+
     /// Deserialize value
     fn deserializeValue(self: *Self, reader: anytype) !storage.Value {
         const type_tag = try reader.readByte();
@@ -357,7 +357,7 @@ pub const HotStandby = struct {
             else => error.InvalidTypeTag,
         };
     }
-    
+
     /// Free row memory
     fn freeRow(self: *Self, row: storage.Row) void {
         for (row.values) |value| {
@@ -369,7 +369,7 @@ pub const HotStandby = struct {
         }
         self.allocator.free(row.values);
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.standby_nodes.deinit(self.allocator);
         self.replication_log.deinit(self.allocator);
@@ -392,17 +392,17 @@ pub const Node = struct {
     port: u16,
     role: NodeRole,
     last_seen: i64,
-    
+
     pub fn notifyPromotion(self: *Node) !void {
         _ = self;
         // Implementation would notify node
     }
-    
+
     pub fn startReplication(self: *Node) !void {
         _ = self;
         // Implementation would start replication
     }
-    
+
     pub fn stopReplication(self: *Node) void {
         _ = self;
         // Implementation would stop replication
@@ -439,9 +439,9 @@ const HeartbeatManager = struct {
     heartbeat_timeout_ms: u64,
     is_monitoring: bool,
     is_broadcasting: bool,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, node_id: []const u8) Self {
         return Self{
             .allocator = allocator,
@@ -454,7 +454,7 @@ const HeartbeatManager = struct {
             .is_broadcasting = false,
         };
     }
-    
+
     pub fn startMonitoring(self: *Self, primary: *Node) !void {
         self.primary_node = primary;
         self.is_monitoring = true;
@@ -462,21 +462,21 @@ const HeartbeatManager = struct {
         self.last_heartbeat = ts.sec;
         // Start background monitoring thread
     }
-    
+
     pub fn stopMonitoring(self: *Self) void {
         self.is_monitoring = false;
         self.primary_node = null;
     }
-    
+
     pub fn startBroadcasting(self: *Self) !void {
         self.is_broadcasting = true;
         // Start background broadcasting thread
     }
-    
+
     pub fn stopBroadcasting(self: *Self) void {
         self.is_broadcasting = false;
     }
-    
+
     pub fn isPrimaryHealthy(self: *Self) bool {
         if (!self.is_monitoring) return false;
 
@@ -486,7 +486,7 @@ const HeartbeatManager = struct {
 
         return time_since_heartbeat < @as(i64, @intCast(self.heartbeat_timeout_ms));
     }
-    
+
     pub fn deinit(self: *Self) void {
         _ = self;
     }
@@ -497,9 +497,9 @@ const FailoverManager = struct {
     allocator: std.mem.Allocator,
     failover_in_progress: bool,
     failover_start_time: i64,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .allocator = allocator,
@@ -507,7 +507,7 @@ const FailoverManager = struct {
             .failover_start_time = 0,
         };
     }
-    
+
     pub fn beginFailover(self: *Self) !void {
         if (self.failover_in_progress) {
             return error.FailoverInProgress;
@@ -517,12 +517,12 @@ const FailoverManager = struct {
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         self.failover_start_time = ts.sec;
     }
-    
+
     pub fn completeFailover(self: *Self) void {
         self.failover_in_progress = false;
         self.failover_start_time = 0;
     }
-    
+
     pub fn deinit(self: *Self) void {
         _ = self;
     }
@@ -533,7 +533,7 @@ pub const SyncState = struct {
     last_applied_index: u64,
     last_applied_timestamp: i64,
     lag_ms: u64,
-    
+
     pub fn init() SyncState {
         return SyncState{
             .last_applied_index = 0,
@@ -549,7 +549,7 @@ pub const StandbyMetrics = struct {
     failover_count: u64,
     planned_failover_count: u64,
     average_replication_lag_ms: f64,
-    
+
     pub fn init() StandbyMetrics {
         return StandbyMetrics{
             .entries_replicated = 0,
@@ -566,20 +566,20 @@ test "hot standby basic operations" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     var storage_engine = try storage.StorageEngine.initMemory(allocator);
     defer storage_engine.deinit();
-    
+
     var mvcc_manager = try mvcc.MVCCTransactionManager.init(allocator, &storage_engine, null);
     defer mvcc_manager.deinit();
-    
+
     var hot_standby = try HotStandby.init(allocator, &mvcc_manager, "node1");
     defer hot_standby.deinit();
-    
+
     // Test initial state
     try testing.expect(hot_standby.role == .Standby);
     try testing.expect(hot_standby.getReplicationLag() == 0);
-    
+
     // Test replication entry
     const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
     const entry = ReplicationEntry{
@@ -588,11 +588,11 @@ test "hot standby basic operations" {
         .operation_type = .Insert,
         .table = "test_table",
         .row_id = 1,
-        .data = &[_]u8{1, 0, 0, 0, 0, 123, 0, 0, 0, 0, 0, 0, 0},
+        .data = &[_]u8{ 1, 0, 0, 0, 0, 123, 0, 0, 0, 0, 0, 0, 0 },
     };
-    
+
     try hot_standby.handleReplicationEntry(entry);
-    
+
     const metrics = hot_standby.getMetrics();
     try testing.expect(metrics.entries_replicated == 1);
 }
@@ -602,22 +602,22 @@ test "failover operations" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     var storage_engine = try storage.StorageEngine.initMemory(allocator);
     defer storage_engine.deinit();
-    
+
     var mvcc_manager = try mvcc.MVCCTransactionManager.init(allocator, &storage_engine, null);
     defer mvcc_manager.deinit();
-    
+
     var hot_standby = try HotStandby.init(allocator, &mvcc_manager, "node1");
     defer hot_standby.deinit();
-    
+
     // Test promotion (would normally check sync state)
     hot_standby.sync_state.lag_ms = 100; // Set low lag
     try hot_standby.promoteToPrimary();
-    
+
     try testing.expect(hot_standby.role == .Primary);
-    
+
     const metrics = hot_standby.getMetrics();
     try testing.expect(metrics.failover_count == 1);
 }

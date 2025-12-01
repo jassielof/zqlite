@@ -20,9 +20,9 @@ pub fn main() !void {
 
     // Set up test data
     std.debug.print("📊 Setting up test data...\n", .{});
-    
+
     try conn.execute("CREATE TABLE products (id INTEGER, name TEXT, category TEXT, price REAL);");
-    
+
     const test_products = [_]struct { id: i32, name: []const u8, category: []const u8, price: f64 }{
         .{ .id = 1, .name = "Laptop", .category = "Electronics", .price = 999.99 },
         .{ .id = 2, .name = "Mouse", .category = "Electronics", .price = 29.99 },
@@ -30,22 +30,22 @@ pub fn main() !void {
         .{ .id = 4, .name = "Desk", .category = "Furniture", .price = 299.99 },
         .{ .id = 5, .name = "Chair", .category = "Furniture", .price = 199.99 },
     };
-    
+
     for (test_products) |product| {
         var stmt = try conn.prepare("INSERT INTO products VALUES (?, ?, ?, ?);");
         defer stmt.deinit();
-        
+
         try stmt.bindParameter(0, zqlite.storage.Value{ .Integer = product.id });
         try stmt.bindParameter(1, zqlite.storage.Value{ .Text = try allocator.dupe(u8, product.name) });
         defer allocator.free(product.name);
         try stmt.bindParameter(2, zqlite.storage.Value{ .Text = try allocator.dupe(u8, product.category) });
         defer allocator.free(product.category);
         try stmt.bindParameter(3, zqlite.storage.Value{ .Real = product.price });
-        
+
         var result = try stmt.execute(conn);
         defer result.deinit();
     }
-    
+
     std.debug.print("✅ Inserted {} product records\n\n", .{test_products.len});
 
     // Demonstrate query caching
@@ -60,7 +60,7 @@ pub fn main() !void {
 
     for (test_queries, 0..) |query, i| {
         std.debug.print("{}. Query: {s}\n", .{ i + 1, query });
-        
+
         // First execution - cache miss
         const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const start_time = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
@@ -85,17 +85,17 @@ pub fn main() !void {
                 .columns = try allocator.alloc([]const u8, 2),
                 .execution_time_ns = end_time - start_time,
             };
-            
+
             // Set up mock data
             mock_result.columns[0] = try allocator.dupe(u8, "name");
             mock_result.columns[1] = try allocator.dupe(u8, "price");
-            
+
             for (mock_result.rows, 0..) |*row, j| {
                 row.values = try allocator.alloc(zqlite.storage.Value, 2);
                 row.values[0] = zqlite.storage.Value{ .Text = try std.fmt.allocPrint(allocator, "Product {}", .{j + 1}) };
                 row.values[1] = zqlite.storage.Value{ .Real = @as(f64, @floatFromInt(100 + j * 50)) };
             }
-            
+
             // Cache the result
             try cache.put(query_hash, query, mock_result);
 
@@ -103,7 +103,6 @@ pub fn main() !void {
             const final_time = @as(i128, ts_final.sec) * std.time.ns_per_s + ts_final.nsec;
             const execution_time = final_time - start_time;
             std.debug.print("   ⏱️  Execution time: {d:.2}ms\n", .{@as(f64, @floatFromInt(execution_time)) / std.time.ns_per_ms});
-
         } else {
             std.debug.print("   ✅ Cache HIT - Using cached result\n", .{});
             const ts_cache = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
@@ -112,11 +111,11 @@ pub fn main() !void {
             std.debug.print("   ⚡ Cache retrieval time: {d:.2}ms\n", .{@as(f64, @floatFromInt(cache_time)) / std.time.ns_per_ms});
             std.debug.print("   📊 Original execution time: {d:.2}ms\n", .{@as(f64, @floatFromInt(cached_result.?.execution_time_ns)) / std.time.ns_per_ms});
         }
-        
+
         // Show cache statistics
         const stats = cache.getStats();
         std.debug.print("   📈 Cache stats: {} entries, {} hits, {} misses\n\n", .{ stats.total_entries, stats.cache_hits, stats.cache_misses });
-        
+
         // Second execution of same query - should be cache hit
         if (i == 0) {
             std.debug.print("   🔄 Re-executing same query...\n", .{});
@@ -124,7 +123,7 @@ pub fn main() !void {
             if (cached_result_2 != null) {
                 std.debug.print("   ✅ Cache HIT on second execution!\n", .{});
             }
-            
+
             const stats_2 = cache.getStats();
             std.debug.print("   📈 Updated stats: {} entries, {} hits, {} misses\n\n", .{ stats_2.total_entries, stats_2.cache_hits, stats_2.cache_misses });
         }
@@ -132,38 +131,38 @@ pub fn main() !void {
 
     // Demonstrate cache eviction
     std.debug.print("🗑️  Cache Eviction Test:\n", .{});
-    
+
     // Fill cache beyond capacity to trigger eviction
     for (0..25) |i| {
         const unique_query = try std.fmt.allocPrint(allocator, "SELECT * FROM products WHERE id = {}", .{i});
         defer allocator.free(unique_query);
-        
+
         const hash = cache.hashQuery(unique_query);
-        
+
         // Create small mock result
         var eviction_result = zqlite.query_cache.CachedResult{
             .rows = try allocator.alloc(zqlite.storage.Row, 1),
             .columns = try allocator.alloc([]const u8, 1),
             .execution_time_ns = 1000000, // 1ms
         };
-        
+
         eviction_result.columns[0] = try allocator.dupe(u8, "id");
         eviction_result.rows[0].values = try allocator.alloc(zqlite.storage.Value, 1);
         eviction_result.rows[0].values[0] = zqlite.storage.Value{ .Integer = @intCast(i) };
-        
+
         try cache.put(hash, unique_query, eviction_result);
     }
-    
+
     const final_stats = cache.getStats();
     std.debug.print("   📊 After adding 25 entries: {} total entries, {} evictions\n", .{ final_stats.total_entries, final_stats.evictions });
 
     // Test cache cleanup
     std.debug.print("\n🧹 Cache Cleanup Test:\n", .{});
-    
+
     // Wait a bit, then clean up old entries
     std.Thread.sleep(100 * std.time.ns_per_ms);
     cache.cleanup(); // Remove entries older than default TTL
-    
+
     const cleanup_stats = cache.getStats();
     std.debug.print("   📊 After cleanup: {} total entries\n", .{cleanup_stats.total_entries});
 

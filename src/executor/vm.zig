@@ -46,7 +46,7 @@ pub const VirtualMachine = struct {
         // Set parameters for this execution
         self.parameters = parameters;
         defer self.parameters = null; // Clear parameters after execution
-        
+
         return self.execute(plan);
     }
 
@@ -183,7 +183,7 @@ pub const VirtualMachine = struct {
             else => value, // Return the value as-is for non-parameters
         };
     }
-    
+
     /// Evaluate a default value, including function calls
     fn evaluateDefaultValue(self: *Self, default_value: ast.DefaultValue) !storage.Value {
         return switch (default_value) {
@@ -196,7 +196,7 @@ pub const VirtualMachine = struct {
             },
         };
     }
-    
+
     /// Convert AST value to storage value
     fn convertAstValueToStorage(self: *Self, value: ast.Value) !storage.Value {
         return switch (value) {
@@ -212,7 +212,7 @@ pub const VirtualMachine = struct {
             },
         };
     }
-    
+
     /// Evaluate a storage default value
     fn evaluateStorageDefaultValue(self: *Self, default_value: storage.Column.DefaultValue) !storage.Value {
         return switch (default_value) {
@@ -230,7 +230,7 @@ pub const VirtualMachine = struct {
             },
         };
     }
-    
+
     /// Convert AST function call to storage function call
     fn convertAstFunctionToStorage(self: *Self, function_call: ast.FunctionCall) !storage.Column.FunctionCall {
         var storage_args = try self.connection.allocator.alloc(storage.Column.FunctionArgument, function_call.arguments.len);
@@ -270,13 +270,13 @@ pub const VirtualMachine = struct {
         for (function_call.arguments, 0..) |arg, i| {
             ast_args[i] = try self.convertStorageFunctionArgToAst(arg);
         }
-        
+
         return ast.FunctionCall{
             .name = try self.connection.allocator.dupe(u8, function_call.name),
             .arguments = ast_args,
         };
     }
-    
+
     /// Convert storage function argument to AST function argument
     fn convertStorageFunctionArgToAst(self: *Self, arg: storage.Column.FunctionArgument) anyerror!ast.FunctionArgument {
         return switch (arg) {
@@ -292,7 +292,7 @@ pub const VirtualMachine = struct {
             },
         };
     }
-    
+
     /// Convert storage value to AST value
     fn convertStorageValueToAst(self: *Self, value: storage.Value) anyerror!ast.Value {
         return switch (value) {
@@ -322,7 +322,7 @@ pub const VirtualMachine = struct {
             .BigInt => |bi| ast.Value{ .Integer = @intCast(bi) },
         };
     }
-    
+
     /// Clone a storage default value
     fn cloneStorageDefaultValue(self: *Self, default_value: storage.Column.DefaultValue) !storage.Column.DefaultValue {
         return switch (default_value) {
@@ -338,7 +338,7 @@ pub const VirtualMachine = struct {
             },
         };
     }
-    
+
     /// Clone a storage function call (shallow - for compatibility)
     fn cloneStorageFunctionCall(self: *Self, function_call: storage.Column.FunctionCall) anyerror!storage.Column.FunctionCall {
         return self.cloneStorageFunctionCallDeep(function_call);
@@ -366,7 +366,7 @@ pub const VirtualMachine = struct {
             .arguments = cloned_args,
         };
     }
-    
+
     /// Clone a storage function argument
     fn cloneStorageFunctionArgument(self: *Self, arg: storage.Column.FunctionArgument) anyerror!storage.Column.FunctionArgument {
         return self.cloneStorageFunctionArgumentDeep(arg);
@@ -976,7 +976,7 @@ pub const VirtualMachine = struct {
                 .UUID => |r| std.mem.order(u8, &l, &r),
                 else => .gt,
             },
-            .Array => .gt, // Complex comparison - simplified 
+            .Array => .gt, // Complex comparison - simplified
             .Boolean => |l| switch (right) {
                 .Boolean => |r| if (l == r) .eq else if (l) .gt else .lt,
                 else => .gt,
@@ -1051,7 +1051,7 @@ pub const VirtualMachine = struct {
         // Perform join logic based on join type
         for (left_rows) |left_row| {
             var matched = false;
-            
+
             for (right_rows) |right_row| {
                 // Create combined row for condition evaluation
                 const combined_row = try self.combineRows(&left_row, &right_row);
@@ -1080,7 +1080,7 @@ pub const VirtualMachine = struct {
                     }
                     self.connection.allocator.free(null_right_row.values);
                 }
-                
+
                 const final_row = try self.combineRows(&left_row, &null_right_row);
                 try result.rows.append(self.connection.allocator, final_row);
             }
@@ -1090,7 +1090,7 @@ pub const VirtualMachine = struct {
         if (join.join_type == .Right or join.join_type == .Full) {
             for (right_rows) |right_row| {
                 var matched = false;
-                
+
                 for (left_rows) |left_row| {
                     const combined_row = try self.combineRows(&left_row, &right_row);
                     defer {
@@ -1115,7 +1115,7 @@ pub const VirtualMachine = struct {
                         }
                         self.connection.allocator.free(null_left_row.values);
                     }
-                    
+
                     const final_row = try self.combineRows(&null_left_row, &right_row);
                     try result.rows.append(self.connection.allocator, final_row);
                 }
@@ -1310,7 +1310,7 @@ pub const VirtualMachine = struct {
                 else => {
                     // TODO: Implement GroupConcat, CountDistinct
                     return error.NotImplemented;
-                }
+                },
             }
         }
     }
@@ -1341,7 +1341,7 @@ pub const VirtualMachine = struct {
         // TODO: Implement group by operations
         return error.NotImplemented;
     }
-    
+
     /// Execute BEGIN TRANSACTION
     fn executeBeginTransaction(self: *Self, result: *ExecutionResult) !void {
         _ = self;
@@ -1349,7 +1349,7 @@ pub const VirtualMachine = struct {
         // TODO: Implement transaction support in storage engine
         // For now, transactions are a no-op
     }
-    
+
     /// Execute COMMIT
     fn executeCommit(self: *Self, result: *ExecutionResult) !void {
         _ = self;
@@ -1357,7 +1357,7 @@ pub const VirtualMachine = struct {
         // TODO: Implement transaction support in storage engine
         // For now, transactions are a no-op
     }
-    
+
     /// Execute ROLLBACK
     fn executeRollback(self: *Self, result: *ExecutionResult) !void {
         _ = self;
@@ -1365,16 +1365,16 @@ pub const VirtualMachine = struct {
         // TODO: Implement transaction support in storage engine
         // For now, transactions are a no-op
     }
-    
+
     /// Execute CREATE INDEX
     fn executeCreateIndex(self: *Self, create_idx: *planner.CreateIndexStep, result: *ExecutionResult) !void {
         _ = result;
-        
+
         // Check if table exists
         const table = self.connection.storage_engine.getTable(create_idx.table_name) orelse {
             return error.TableNotFound;
         };
-        
+
         // Verify columns exist
         for (create_idx.columns) |col_name| {
             var found = false;
@@ -1388,11 +1388,11 @@ pub const VirtualMachine = struct {
                 return error.ColumnNotFound;
             }
         }
-        
+
         // TODO: Actually create and store the index
         // For now, index creation is a no-op
     }
-    
+
     /// Execute DROP INDEX
     fn executeDropIndex(self: *Self, drop_idx: *planner.DropIndexStep, result: *ExecutionResult) !void {
         _ = self;

@@ -13,36 +13,36 @@ pub fn main() !void {
     std.log.info("Testing datetime function support...", .{});
 
     // Test 1: Create table with datetime default
-    const create_table_sql = 
+    const create_table_sql =
         \\CREATE TABLE test_table (
         \\    id INTEGER PRIMARY KEY,
         \\    name TEXT NOT NULL,
         \\    created_at TEXT DEFAULT (datetime('now'))
         \\);
     ;
-    
+
     std.log.info("Creating table with datetime default...", .{});
     try db.execute(create_table_sql);
     std.log.info("✓ Table created successfully", .{});
 
     // Test 2: Insert data without providing created_at (should use default)
     const insert_sql = "INSERT INTO test_table (name) VALUES ('test_user');";
-    
+
     std.log.info("Inserting data without datetime column...", .{});
     try db.execute(insert_sql);
     std.log.info("✓ Data inserted successfully", .{});
 
     // Test 3: Query the data to see if default was applied
     const select_sql = "SELECT * FROM test_table;";
-    
+
     std.log.info("Querying data to check default value...", .{});
     const result = try db.query(select_sql);
     defer result.deinit();
-    
+
     if (result.rows.items.len > 0) {
         const row = result.rows.items[0];
         std.log.info("✓ Found row with {} columns", .{row.values.len});
-        
+
         if (row.values.len >= 3) {
             const created_at = row.values[2];
             switch (created_at) {
@@ -80,7 +80,7 @@ pub fn main() !void {
             continue;
         };
         defer test_result.deinit();
-        
+
         if (test_result.rows.items.len > 0) {
             const row = test_result.rows.items[0];
             if (row.values.len > 0) {

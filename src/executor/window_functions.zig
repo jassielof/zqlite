@@ -9,7 +9,7 @@ pub const WindowContext = struct {
     current_row: usize,
     partition_start: usize,
     partition_end: usize,
-    
+
     pub fn init(allocator: std.mem.Allocator, rows: []storage.Row) WindowContext {
         return WindowContext{
             .allocator = allocator,
@@ -24,11 +24,11 @@ pub const WindowContext = struct {
 /// Window function executor
 pub const WindowExecutor = struct {
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) WindowExecutor {
         return WindowExecutor{ .allocator = allocator };
     }
-    
+
     /// Execute a window function
     pub fn executeWindowFunction(
         self: *WindowExecutor,
@@ -49,14 +49,14 @@ pub const WindowExecutor = struct {
             .NthValue => try self.executeNthValue(function, context),
         };
     }
-    
+
     /// Execute ROW_NUMBER() window function
     fn executeRowNumber(self: *WindowExecutor, context: *WindowContext) !storage.Value {
         _ = self;
         const row_number = context.current_row - context.partition_start + 1;
         return storage.Value{ .Integer = @intCast(row_number) };
     }
-    
+
     /// Execute RANK() window function
     fn executeRank(self: *WindowExecutor, context: *WindowContext) !storage.Value {
         _ = self;
@@ -65,7 +65,7 @@ pub const WindowExecutor = struct {
         const rank = context.current_row - context.partition_start + 1;
         return storage.Value{ .Integer = @intCast(rank) };
     }
-    
+
     /// Execute DENSE_RANK() window function
     fn executeDenseRank(self: *WindowExecutor, context: *WindowContext) !storage.Value {
         _ = self;
@@ -74,50 +74,50 @@ pub const WindowExecutor = struct {
         const dense_rank = context.current_row - context.partition_start + 1;
         return storage.Value{ .Integer = @intCast(dense_rank) };
     }
-    
+
     /// Execute LEAD() window function
     fn executeLead(self: *WindowExecutor, function: ast.WindowFunction, context: *WindowContext) !storage.Value {
         _ = self;
         _ = function;
-        
+
         const offset = 1; // Default lead offset
         const lead_row_index = context.current_row + offset;
-        
+
         if (lead_row_index >= context.partition_end) {
             return storage.Value.Null; // No lead value available
         }
-        
+
         // For basic implementation, return the first column of the lead row
         // TODO: Implement proper column selection based on function arguments
         if (context.rows[lead_row_index].values.len > 0) {
             return context.rows[lead_row_index].values[0];
         }
-        
+
         return storage.Value.Null;
     }
-    
+
     /// Execute LAG() window function
     fn executeLag(self: *WindowExecutor, function: ast.WindowFunction, context: *WindowContext) !storage.Value {
         _ = self;
         _ = function;
-        
+
         const offset = 1; // Default lag offset
-        
+
         if (context.current_row < context.partition_start + offset) {
             return storage.Value.Null; // No lag value available
         }
-        
+
         const lag_row_index = context.current_row - offset;
-        
+
         // For basic implementation, return the first column of the lag row
         // TODO: Implement proper column selection based on function arguments
         if (context.rows[lag_row_index].values.len > 0) {
             return context.rows[lag_row_index].values[0];
         }
-        
+
         return storage.Value.Null;
     }
-    
+
     /// Apply window functions to a result set
     pub fn applyWindowFunctions(
         self: *WindowExecutor,
@@ -125,28 +125,28 @@ pub const WindowExecutor = struct {
         window_functions: []ast.WindowFunction,
     ) !void {
         if (window_functions.len == 0) return;
-        
+
         var context = WindowContext.init(self.allocator, rows.items);
-        
+
         // Process each row
         for (rows.items, 0..) |*row, i| {
             context.current_row = i;
-            
+
             // Apply each window function
             for (window_functions) |window_func| {
                 const result = try self.executeWindowFunction(window_func, &context);
-                
+
                 // Add the window function result as a new column
                 var new_values = try self.allocator.alloc(storage.Value, row.values.len + 1);
-                
+
                 // Copy existing values
                 for (row.values, 0..) |value, j| {
                     new_values[j] = value;
                 }
-                
+
                 // Add window function result
                 new_values[row.values.len] = result;
-                
+
                 // Replace the row's values
                 self.allocator.free(row.values);
                 row.values = new_values;
@@ -159,7 +159,7 @@ pub const WindowExecutor = struct {
         _ = self;
         const partition_size = context.partition_end - context.partition_start;
         if (partition_size <= 1) return storage.Value{ .Real = 0.0 };
-        
+
         const position = context.current_row - context.partition_start;
         const percent_rank = @as(f64, @floatFromInt(position)) / @as(f64, @floatFromInt(partition_size - 1));
         return storage.Value{ .Real = percent_rank };
@@ -180,7 +180,7 @@ pub const WindowExecutor = struct {
         _ = function;
         const partition_size = context.partition_end - context.partition_start;
         const position = context.current_row - context.partition_start;
-        
+
         // Default to 4 buckets if no argument specified
         const buckets = 4;
         const bucket_size = partition_size / buckets;
@@ -223,7 +223,7 @@ pub const WindowExecutor = struct {
 /// Window function type enumeration
 pub const WindowFunctionType = enum {
     RowNumber,
-    Rank, 
+    Rank,
     DenseRank,
     Lead,
     Lag,
@@ -234,9 +234,9 @@ test "window function ROW_NUMBER" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     var executor = WindowExecutor.init(allocator);
-    
+
     // Create test data
     var rows = std.ArrayList(storage.Row).init(allocator);
     defer {
@@ -245,14 +245,14 @@ test "window function ROW_NUMBER" {
         }
         rows.deinit();
     }
-    
+
     // Add test rows
     for (0..5) |i| {
         var values = try allocator.alloc(storage.Value, 1);
         values[0] = storage.Value{ .Integer = @intCast(i) };
         try rows.append(storage.Row{ .values = values });
     }
-    
+
     // Create window function
     const window_func = ast.WindowFunction{
         .function_type = .RowNumber,
@@ -263,10 +263,10 @@ test "window function ROW_NUMBER" {
             .frame = null,
         },
     };
-    
+
     // Apply window function
     try executor.applyWindowFunctions(&rows, &[_]ast.WindowFunction{window_func});
-    
+
     // Verify results
     for (rows.items, 0..) |row, i| {
         try std.testing.expect(row.values.len == 2); // Original + ROW_NUMBER
@@ -278,24 +278,24 @@ test "window function context" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     // Create test rows
     var values1 = try allocator.alloc(storage.Value, 1);
     values1[0] = storage.Value{ .Integer = 1 };
     var values2 = try allocator.alloc(storage.Value, 1);
     values2[0] = storage.Value{ .Integer = 2 };
-    
+
     const rows = [_]storage.Row{
         storage.Row{ .values = values1 },
         storage.Row{ .values = values2 },
     };
-    
+
     const context = WindowContext.init(allocator, @constCast(&rows));
-    
+
     try std.testing.expect(context.rows.len == 2);
     try std.testing.expect(context.partition_start == 0);
     try std.testing.expect(context.partition_end == 2);
-    
+
     allocator.free(values1);
     allocator.free(values2);
 }

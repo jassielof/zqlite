@@ -19,7 +19,6 @@ pub const Connection = struct {
 
     /// Open a database file
     pub fn open(allocator: std.mem.Allocator, path: []const u8) !*Self {
-
         var conn = try allocator.create(Self);
         conn.allocator = allocator;
         conn.storage_engine = try storage.StorageEngine.init(allocator, path);
@@ -33,7 +32,6 @@ pub const Connection = struct {
 
     /// Open an in-memory database
     pub fn openMemory(allocator: std.mem.Allocator) !*Self {
-
         var conn = try allocator.create(Self);
         conn.allocator = allocator;
         conn.storage_engine = try storage.StorageEngine.initMemory(allocator);
@@ -54,7 +52,7 @@ pub const Connection = struct {
         conn.is_memory = true; // Assume shared storage is memory-based for simplicity
         conn.path = null;
         conn.owns_storage = false; // This connection doesn't own the storage
-        
+
         return conn;
     }
 
@@ -74,7 +72,7 @@ pub const Connection = struct {
             try w.beginTransaction();
         }
     }
-    
+
     /// Begin a transaction (alias)
     pub fn begin(self: *Self) !void {
         try self.beginTransaction();
@@ -86,7 +84,7 @@ pub const Connection = struct {
             try w.commit();
         }
     }
-    
+
     /// Commit a transaction (alias)
     pub fn commit(self: *Self) !void {
         try self.commitTransaction();
@@ -98,7 +96,7 @@ pub const Connection = struct {
             try w.rollback();
         }
     }
-    
+
     /// Rollback a transaction (alias)
     pub fn rollback(self: *Self) !void {
         try self.rollbackTransaction();
@@ -110,7 +108,7 @@ pub const Connection = struct {
         errdefer self.rollback() catch |err| {
             std.log.err("Failed to rollback transaction: {}", .{err});
         };
-        
+
         try function(self, context);
         try self.commit();
     }
@@ -121,7 +119,7 @@ pub const Connection = struct {
         errdefer self.rollback() catch |err| {
             std.log.err("Failed to rollback transaction: {}", .{err});
         };
-        
+
         try function(self);
         try self.commit();
     }
@@ -132,11 +130,11 @@ pub const Connection = struct {
         errdefer self.rollback() catch |err| {
             std.log.err("Failed to rollback transaction: {}", .{err});
         };
-        
+
         for (sql_statements) |sql| {
             try self.execute(sql);
         }
-        
+
         try self.commit();
     }
 
@@ -146,18 +144,18 @@ pub const Connection = struct {
     }
 
     // ========== BROAD API SURFACES (v1.2.2) ==========
-    
+
     /// Execute SQL and return structured results (SQLite-style)
     pub fn query(self: *Self, sql: []const u8) !ResultSet {
         // Parse the SQL
         var parsed = try parser.parse(self.allocator, sql);
         defer parsed.deinit();
-        
+
         // Create execution plan
         var query_planner = planner.Planner.init(self.allocator);
         var plan = try query_planner.plan(&parsed.statement);
         defer plan.deinit();
-        
+
         // Execute and get results
         var virtual_machine = vm.VirtualMachine.init(self.allocator, self);
         var result = try virtual_machine.execute(&plan);
@@ -179,38 +177,38 @@ pub const Connection = struct {
 
         return result_set;
     }
-    
+
     /// Execute SQL and return single row (or null)
     pub fn queryRow(self: *Self, sql: []const u8) !?Row {
         var result_set = try self.query(sql);
         defer result_set.deinit();
-        
+
         return result_set.next();
     }
-    
+
     /// Execute SQL statement and return affected row count
     pub fn exec(self: *Self, sql: []const u8) !u32 {
         // Parse the SQL
         var parsed = try parser.parse(self.allocator, sql);
         defer parsed.deinit();
-        
+
         // Create execution plan
         var query_planner = planner.Planner.init(self.allocator);
         var plan = try query_planner.plan(&parsed.statement);
         defer plan.deinit();
-        
+
         // Execute and get results
         var virtual_machine = vm.VirtualMachine.init(self.allocator, self);
         var result = try virtual_machine.execute(&plan);
         defer result.deinit();
-        
+
         return result.affected_rows;
     }
-    
+
     /// Get table schema information
     pub fn getTableSchema(self: *Self, table_name: []const u8) !?TableSchema {
         const table = self.storage_engine.getTable(table_name) orelse return null;
-        
+
         // Clone the schema for safe return
         var cloned_columns = try self.allocator.alloc(ColumnInfo, table.schema.columns.len);
         for (table.schema.columns, 0..) |column, i| {
@@ -222,19 +220,19 @@ pub const Connection = struct {
                 .has_default = column.default_value != null,
             };
         }
-        
+
         return TableSchema{
             .allocator = self.allocator,
             .table_name = try self.allocator.dupe(u8, table_name),
             .columns = cloned_columns,
         };
     }
-    
+
     /// List all table names in the database
     pub fn getTableNames(self: *Self) ![][]const u8 {
         return self.storage_engine.getTableNames(self.allocator);
     }
-    
+
     /// Extract column names from parsed statement (helper)
     fn extractColumnNames(self: *Self, statement: *const ast.Statement) ![][]const u8 {
         switch (statement.*) {
@@ -251,7 +249,7 @@ pub const Connection = struct {
                         return column_names;
                     }
                 }
-                
+
                 // Explicit column list
                 var column_names = try self.allocator.alloc([]const u8, select.columns.len);
                 for (select.columns, 0..) |column, i| {
@@ -262,10 +260,10 @@ pub const Connection = struct {
             else => {
                 // Non-SELECT statements have no columns
                 return try self.allocator.alloc([]const u8, 0);
-            }
+            },
         }
     }
-    
+
     // ========== END BROAD API SURFACES ==========
 
     /// Close the database connection
@@ -273,12 +271,12 @@ pub const Connection = struct {
         if (self.wal) |w| {
             w.deinit();
         }
-        
+
         // Only deinit storage if this connection owns it
         if (self.owns_storage) {
             self.storage_engine.deinit();
         }
-        
+
         if (self.path) |p| {
             self.allocator.free(p);
         }
@@ -367,28 +365,28 @@ pub const ResultSet = struct {
             .column_names = owned_column_names,
         };
     }
-    
+
     /// Reset to beginning
     pub fn reset(self: *Self) void {
         self.current_index = 0;
     }
-    
+
     /// Get total row count
     pub fn count(self: *Self) usize {
         return self.rows.items.len;
     }
-    
+
     /// Get column count
     pub fn columnCount(self: *Self) usize {
         return self.column_names.len;
     }
-    
+
     /// Get column name by index
     pub fn columnName(self: *Self, index: usize) ?[]const u8 {
         if (index >= self.column_names.len) return null;
         return self.column_names[index];
     }
-    
+
     /// Clean up result set
     pub fn deinit(self: *Self) void {
         // Clean up column names
@@ -415,13 +413,13 @@ pub const Row = struct {
     column_names: [][]const u8,
 
     const Self = @This();
-    
+
     /// Get value by column index
     pub fn getValue(self: *const Self, index: usize) ?storage.Value {
         if (index >= self.values.len) return null;
         return self.values[index];
     }
-    
+
     /// Get value by column name
     pub fn getValueByName(self: *const Self, name: []const u8) ?storage.Value {
         for (self.column_names, 0..) |col_name, i| {
@@ -431,7 +429,7 @@ pub const Row = struct {
         }
         return null;
     }
-    
+
     /// Get integer value by index
     pub fn getInt(self: *const Self, index: usize) ?i64 {
         const value = self.getValue(index) orelse return null;
@@ -441,7 +439,7 @@ pub const Row = struct {
             else => null,
         };
     }
-    
+
     /// Get integer value by column name
     pub fn getIntByName(self: *const Self, name: []const u8) ?i64 {
         const value = self.getValueByName(name) orelse return null;
@@ -451,7 +449,7 @@ pub const Row = struct {
             else => null,
         };
     }
-    
+
     /// Get real/float value by index
     pub fn getReal(self: *const Self, index: usize) ?f64 {
         const value = self.getValue(index) orelse return null;
@@ -461,7 +459,7 @@ pub const Row = struct {
             else => null,
         };
     }
-    
+
     /// Get real/float value by column name
     pub fn getRealByName(self: *const Self, name: []const u8) ?f64 {
         const value = self.getValueByName(name) orelse return null;
@@ -471,7 +469,7 @@ pub const Row = struct {
             else => null,
         };
     }
-    
+
     /// Get text value by index
     pub fn getText(self: *const Self, index: usize) ?[]const u8 {
         const value = self.getValue(index) orelse return null;
@@ -480,7 +478,7 @@ pub const Row = struct {
             else => null,
         };
     }
-    
+
     /// Get text value by column name
     pub fn getTextByName(self: *const Self, name: []const u8) ?[]const u8 {
         const value = self.getValueByName(name) orelse return null;
@@ -489,7 +487,7 @@ pub const Row = struct {
             else => null,
         };
     }
-    
+
     /// Get blob value by index
     pub fn getBlob(self: *const Self, index: usize) ?[]const u8 {
         const value = self.getValue(index) orelse return null;
@@ -498,7 +496,7 @@ pub const Row = struct {
             else => null,
         };
     }
-    
+
     /// Get blob value by column name
     pub fn getBlobByName(self: *const Self, name: []const u8) ?[]const u8 {
         const value = self.getValueByName(name) orelse return null;
@@ -507,19 +505,19 @@ pub const Row = struct {
             else => null,
         };
     }
-    
+
     /// Check if value is null by index
     pub fn isNull(self: *const Self, index: usize) bool {
         const value = self.getValue(index) orelse return true;
         return value == .Null;
     }
-    
+
     /// Check if value is null by column name
     pub fn isNullByName(self: *const Self, name: []const u8) bool {
         const value = self.getValueByName(name) orelse return true;
         return value == .Null;
     }
-    
+
     /// Get column count
     pub fn columnCount(self: *const Self) usize {
         return self.values.len;
@@ -548,7 +546,7 @@ pub const TableSchema = struct {
     columns: []ColumnInfo,
 
     const Self = @This();
-    
+
     /// Find column by name
     pub fn getColumn(self: *const Self, name: []const u8) ?ColumnInfo {
         for (self.columns) |column| {
@@ -558,12 +556,12 @@ pub const TableSchema = struct {
         }
         return null;
     }
-    
+
     /// Get column count
     pub fn columnCount(self: *const Self) usize {
         return self.columns.len;
     }
-    
+
     /// Clean up table schema
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.table_name);
@@ -649,7 +647,7 @@ pub const PreparedStatement = struct {
             *const [5:0]u8, *const [4:0]u8, *const [3:0]u8, *const [6:0]u8, *const [7:0]u8, *const [8:0]u8, *const [9:0]u8, *const [10:0]u8, *const [11:0]u8, *const [12:0]u8, *const [13:0]u8, *const [14:0]u8, *const [15:0]u8, *const [16:0]u8, *const [17:0]u8, *const [18:0]u8, *const [19:0]u8, *const [20:0]u8 => storage.Value{ .Text = value },
             else => @compileError("Unsupported type for bind: " ++ @typeName(value_type) ++ " - use bindParameter() instead"),
         };
-        
+
         try self.bindParameter(index, storage_value);
     }
 

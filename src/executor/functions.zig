@@ -5,22 +5,22 @@ const Allocator = std.mem.Allocator;
 
 pub const FunctionEvaluator = struct {
     const Self = @This();
-    
+
     allocator: Allocator,
-    
+
     pub fn init(allocator: Allocator) Self {
         return Self{
             .allocator = allocator,
         };
     }
-    
+
     pub fn evaluateFunction(self: *Self, function_call: ast.FunctionCall) !storage.Value {
         const func_name = function_call.name;
-        
+
         // Convert function name to lowercase for case-insensitive comparison
         const lower_name = try std.ascii.allocLowerString(self.allocator, func_name);
         defer self.allocator.free(lower_name);
-        
+
         if (std.mem.eql(u8, lower_name, "now")) {
             return self.evalNow(function_call.arguments);
         } else if (std.mem.eql(u8, lower_name, "current_timestamp")) {
@@ -45,7 +45,7 @@ pub const FunctionEvaluator = struct {
             return error.UnknownFunction;
         }
     }
-    
+
     fn evalNow(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
         if (arguments.len != 0) {
             return error.InvalidArgumentCount;
@@ -57,16 +57,16 @@ pub const FunctionEvaluator = struct {
         const datetime_str = try self.formatTimestamp(timestamp);
         return storage.Value{ .Text = datetime_str };
     }
-    
+
     fn evalDatetime(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
         if (arguments.len == 0) {
             return self.evalNow(&[_]ast.FunctionArgument{});
         }
-        
+
         if (arguments.len != 1) {
             return error.InvalidArgumentCount;
         }
-        
+
         const arg = arguments[0];
         switch (arg) {
             .Literal => |value| {
@@ -89,18 +89,18 @@ pub const FunctionEvaluator = struct {
             else => return error.InvalidArgumentType,
         }
     }
-    
+
     fn evalStrftime(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
         if (arguments.len != 2) {
             return error.InvalidArgumentCount;
         }
-        
+
         const format_arg = arguments[0];
         const time_arg = arguments[1];
-        
+
         var format_str: []const u8 = undefined;
         var timestamp: i64 = undefined;
-        
+
         // Get format string
         switch (format_arg) {
             .Literal => |value| {
@@ -111,7 +111,7 @@ pub const FunctionEvaluator = struct {
             },
             else => return error.InvalidArgumentType,
         }
-        
+
         // Get timestamp
         switch (time_arg) {
             .Literal => |value| {
@@ -131,12 +131,12 @@ pub const FunctionEvaluator = struct {
             },
             else => return error.InvalidArgumentType,
         }
-        
+
         // Format the timestamp
         const formatted = try self.formatTimestampWithFormat(timestamp, format_str);
         return storage.Value{ .Text = formatted };
     }
-    
+
     fn evalUnixepoch(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
         if (arguments.len == 0) {
             const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
@@ -166,7 +166,7 @@ pub const FunctionEvaluator = struct {
             else => return error.InvalidArgumentType,
         }
     }
-    
+
     fn evalJulianday(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
         if (arguments.len == 0) {
             const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
@@ -204,7 +204,7 @@ pub const FunctionEvaluator = struct {
             else => return error.InvalidArgumentType,
         }
     }
-    
+
     fn evalDate(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
         if (arguments.len == 0) {
             const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
@@ -242,7 +242,7 @@ pub const FunctionEvaluator = struct {
             else => return error.InvalidArgumentType,
         }
     }
-    
+
     fn evalTime(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
         if (arguments.len == 0) {
             const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
@@ -337,11 +337,9 @@ pub const FunctionEvaluator = struct {
         const minute = (seconds_in_day % 3600) / 60;
         const second = seconds_in_day % 60;
 
-        return std.fmt.allocPrint(self.allocator, "{d:4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
-            year, month, day, hour, minute, second
-        });
+        return std.fmt.allocPrint(self.allocator, "{d:4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{ year, month, day, hour, minute, second });
     }
-    
+
     fn formatTimestampWithFormat(self: *Self, timestamp: i64, format: []const u8) ![]u8 {
         // Simple format implementation - in production, use proper strftime
         if (std.mem.eql(u8, format, "%s")) {
@@ -357,7 +355,7 @@ pub const FunctionEvaluator = struct {
             return self.formatTimestamp(timestamp);
         }
     }
-    
+
     fn formatDate(self: *Self, timestamp: i64) ![]u8 {
         const epoch_seconds = @as(u64, @intCast(@max(timestamp, 0)));
         const days_since_epoch = epoch_seconds / 86400;
@@ -368,24 +366,20 @@ pub const FunctionEvaluator = struct {
         const month = 1 + (day_in_year / 30);
         const day = 1 + (day_in_year % 30);
 
-        return std.fmt.allocPrint(self.allocator, "{d:4}-{d:0>2}-{d:0>2}", .{
-            year, month, day
-        });
+        return std.fmt.allocPrint(self.allocator, "{d:4}-{d:0>2}-{d:0>2}", .{ year, month, day });
     }
-    
+
     fn formatTime(self: *Self, timestamp: i64) ![]u8 {
         const epoch_seconds = @as(u64, @intCast(timestamp));
         const seconds_in_day = epoch_seconds % 86400;
-        
+
         const hour = seconds_in_day / 3600;
         const minute = (seconds_in_day % 3600) / 60;
         const second = seconds_in_day % 60;
-        
-        return std.fmt.allocPrint(self.allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{
-            hour, minute, second
-        });
+
+        return std.fmt.allocPrint(self.allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second });
     }
-    
+
     fn parseTimestamp(self: *Self, datetime_str: []const u8) !i64 {
         _ = self;
         // Simplified parser - in production, use proper datetime parsing
@@ -403,7 +397,7 @@ pub const FunctionEvaluator = struct {
             return ts.sec;
         }
     }
-    
+
     fn timestampToJulianDay(self: *Self, timestamp: i64) f64 {
         _ = self;
         // Convert Unix timestamp to Julian Day Number
@@ -416,9 +410,9 @@ pub const FunctionEvaluator = struct {
 
 test "datetime function evaluation" {
     const allocator = std.testing.allocator;
-    
+
     var evaluator = FunctionEvaluator.init(allocator);
-    
+
     // Test NOW() function
     const now_args = [_]ast.FunctionArgument{};
     const now_result = try evaluator.evaluateFunction(ast.FunctionCall{
@@ -426,9 +420,9 @@ test "datetime function evaluation" {
         .arguments = @constCast(&now_args),
     });
     defer now_result.deinit(allocator);
-    
+
     try std.testing.expect(now_result == .Text);
-    
+
     // Test DATETIME('now') function
     const datetime_args = [_]ast.FunctionArgument{
         ast.FunctionArgument{ .Literal = ast.Value{ .Text = "now" } },
@@ -438,18 +432,18 @@ test "datetime function evaluation" {
         .arguments = @constCast(&datetime_args),
     });
     defer datetime_result.deinit(allocator);
-    
+
     try std.testing.expect(datetime_result == .Text);
-    
+
     // Test UNIXEPOCH() function
     const unixepoch_args = [_]ast.FunctionArgument{};
     const unixepoch_result = try evaluator.evaluateFunction(ast.FunctionCall{
         .name = "unixepoch",
         .arguments = @constCast(&unixepoch_args),
     });
-    
+
     try std.testing.expect(unixepoch_result == .Integer);
-    
+
     // Test STRFTIME('%s', 'now') function
     const strftime_args = [_]ast.FunctionArgument{
         ast.FunctionArgument{ .Literal = ast.Value{ .Text = "%s" } },
@@ -460,6 +454,6 @@ test "datetime function evaluation" {
         .arguments = @constCast(&strftime_args),
     });
     defer strftime_result.deinit(allocator);
-    
+
     try std.testing.expect(strftime_result == .Text);
 }

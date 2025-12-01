@@ -34,7 +34,7 @@ pub const MVCCTransactionManager = struct {
     pub fn beginTransaction(self: *Self, isolation_level: IsolationLevel) !TransactionId {
         const transaction_id = self.generateTransactionId();
         const start_version = self.version_counter.load(.acquire);
-        
+
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const transaction = try self.allocator.create(Transaction);
         transaction.* = Transaction{
@@ -52,17 +52,17 @@ pub const MVCCTransactionManager = struct {
 
         self.global_lock.lock();
         defer self.global_lock.unlock();
-        
+
         try self.transactions.put(transaction_id, transaction);
         try self.deadlock_detector.addTransaction(transaction_id);
-        
+
         return transaction_id;
     }
 
     /// Read a row with MVCC visibility rules
     pub fn readRow(self: *Self, transaction_id: TransactionId, table: []const u8, row_id: storage.RowId) !?storage.Row {
         const transaction = self.transactions.get(transaction_id) orelse return error.TransactionNotFound;
-        
+
         // Check write set first (read your own writes)
         const row_key = RowKey{ .table = table, .row_id = row_id };
         if (transaction.write_set.get(row_key)) |row_value| {
@@ -86,7 +86,7 @@ pub const MVCCTransactionManager = struct {
     /// Write a row with conflict detection
     pub fn writeRow(self: *Self, transaction_id: TransactionId, table: []const u8, row_id: storage.RowId, row: storage.Row) !void {
         const transaction = self.transactions.get(transaction_id) orelse return error.TransactionNotFound;
-        
+
         if (transaction.state != .Active) {
             return error.TransactionNotActive;
         }
@@ -116,7 +116,7 @@ pub const MVCCTransactionManager = struct {
     /// Delete a row
     pub fn deleteRow(self: *Self, transaction_id: TransactionId, table: []const u8, row_id: storage.RowId) !void {
         const transaction = self.transactions.get(transaction_id) orelse return error.TransactionNotFound;
-        
+
         if (transaction.state != .Active) {
             return error.TransactionNotActive;
         }
@@ -129,14 +129,14 @@ pub const MVCCTransactionManager = struct {
     /// Commit a transaction with optimistic concurrency control
     pub fn commitTransaction(self: *Self, transaction_id: TransactionId) !void {
         const transaction = self.transactions.get(transaction_id) orelse return error.TransactionNotFound;
-        
+
         if (transaction.state != .Active) {
             return error.TransactionNotActive;
         }
 
         // Phase 1: Validation
         const commit_version = self.version_counter.fetchAdd(1, .acq_rel) + 1;
-        
+
         // Check for conflicts in read set
         if (try self.hasReadConflicts(transaction)) {
             transaction.state = .Aborted;
@@ -191,7 +191,7 @@ pub const MVCCTransactionManager = struct {
     /// Abort a transaction
     pub fn abortTransaction(self: *Self, transaction_id: TransactionId) !void {
         const transaction = self.transactions.get(transaction_id) orelse return error.TransactionNotFound;
-        
+
         transaction.state = .Aborted;
         try self.releaseLocks(transaction);
         try self.deadlock_detector.removeTransaction(transaction_id);
@@ -201,7 +201,7 @@ pub const MVCCTransactionManager = struct {
     fn findVisibleVersion(self: *Self, transaction: *Transaction, table: []const u8, row_id: storage.RowId) !?RowVersion {
         // For now, simplified implementation - read from current storage
         // In full MVCC, we'd maintain version chains
-        
+
         const table_obj = self.storage_engine.getTable(table) orelse return null;
         const rows = try table_obj.select(self.allocator);
         defer {
@@ -223,7 +223,7 @@ pub const MVCCTransactionManager = struct {
             };
             return version;
         }
-        
+
         return null;
     }
 
@@ -287,9 +287,9 @@ pub const MVCCTransactionManager = struct {
     fn writeToStorage(self: *Self, table: []const u8, row_id: storage.RowId, row: storage.Row, version: u64) !void {
         _ = version; // TODO: Store version information
         _ = row_id; // TODO: Use row_id for positioning
-        
+
         const table_obj = self.storage_engine.getTable(table) orelse return error.TableNotFound;
-        
+
         // For now, simple overwrite - in full MVCC we'd create new versions
         try table_obj.insert(row);
     }
@@ -356,9 +356,9 @@ pub const MVCCTransactionManager = struct {
 /// Transaction isolation levels
 pub const IsolationLevel = enum {
     ReadUncommitted, // Dirty reads allowed
-    ReadCommitted,   // No dirty reads
-    RepeatableRead,  // No dirty reads, no non-repeatable reads
-    Serializable,    // No dirty reads, no non-repeatable reads, no phantom reads
+    ReadCommitted, // No dirty reads
+    RepeatableRead, // No dirty reads, no non-repeatable reads
+    Serializable, // No dirty reads, no non-repeatable reads, no phantom reads
 };
 
 /// Transaction states
@@ -528,7 +528,7 @@ pub const AsyncTransactionPool = struct {
     pub fn executeTransactionAsync(self: *Self, comptime Context: type, context: Context, transaction_fn: fn (Context, TransactionId) anyerror!void, isolation_level: IsolationLevel, max_retries: u32) !void {
         var future = self.io.async(executeTransactionWorker, .{ self, Context, context, transaction_fn, isolation_level, max_retries });
         defer future.cancel(self.io) catch {};
-        
+
         return try future.await(self.io);
     }
 
@@ -537,7 +537,7 @@ pub const AsyncTransactionPool = struct {
         for (contexts) |context| {
             _ = try zsync.spawn(executeTransactionTask, .{ self, Context, context, transaction_fn, isolation_level, 3 });
         }
-        
+
         // Allow spawned tasks to complete
         try zsync.sleep(10);
     }
@@ -553,7 +553,7 @@ pub const AsyncTransactionPool = struct {
     /// Execute a transaction function with automatic retry on conflicts (sync version)
     fn executeTransactionSync(self: *Self, comptime Context: type, context: Context, transaction_fn: fn (Context, TransactionId) anyerror!void, isolation_level: IsolationLevel, max_retries: u32) !void {
         var retry_count: u32 = 0;
-        
+
         while (retry_count < max_retries) {
             // Wait for semaphore (rate limiting)
             self.semaphore.wait();
@@ -563,7 +563,7 @@ pub const AsyncTransactionPool = struct {
             defer _ = self.active_transactions.fetchSub(1, .acq_rel);
 
             const transaction_id = try self.mvcc_manager.beginTransaction(isolation_level);
-            
+
             const result = transaction_fn(context, transaction_id);
             if (result) {
                 // Success, try to commit
@@ -574,7 +574,7 @@ pub const AsyncTransactionPool = struct {
                         // Retry on conflicts
                         try self.mvcc_manager.abortTransaction(transaction_id);
                         retry_count += 1;
-                        
+
                         // Exponential backoff using zsync sleep
                         const backoff_time = (@as(u64, 1) << @min(retry_count, 10));
                         try zsync.sleep(backoff_time);
@@ -706,7 +706,7 @@ test "async transaction pool with zsync" {
         fn run(context: TestContext, transaction_id: TransactionId) !void {
             _ = transaction_id;
             _ = context.counter.fetchAdd(1, .acq_rel);
-            
+
             // Simulate some work
             const test_row = storage.Row{
                 .values = &[_]storage.Value{storage.Value{ .Integer = context.value }},

@@ -54,7 +54,7 @@ pub const SelectStatement = struct {
             }
         }
         allocator.free(self.columns);
-        
+
         if (self.table) |table| {
             allocator.free(table);
         }
@@ -86,7 +86,7 @@ pub const SelectStatement = struct {
             }
             allocator.free(order_by);
         }
-        
+
         if (self.window_definitions) |windows| {
             for (windows) |*window| {
                 window.deinit(allocator);
@@ -147,7 +147,7 @@ pub const CreateTableStatement = struct {
             allocator.free(column.constraints);
         }
         allocator.free(self.columns);
-        
+
         for (self.table_constraints) |constraint| {
             constraint.deinit(allocator);
         }
@@ -200,7 +200,7 @@ pub const ColumnExpression = union(enum) {
     Aggregate: AggregateFunction,
     Window: WindowFunction, // PostgreSQL window functions
     FunctionCall: FunctionCall, // Regular function calls
-    
+
     pub fn deinit(self: *ColumnExpression, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .Simple => |name| allocator.free(name),
@@ -215,7 +215,7 @@ pub const ColumnExpression = union(enum) {
 pub const AggregateFunction = struct {
     function_type: AggregateFunctionType,
     column: ?[]const u8, // NULL for COUNT(*)
-    
+
     pub fn deinit(self: *AggregateFunction, allocator: std.mem.Allocator) void {
         if (self.column) |col| {
             allocator.free(col);
@@ -273,7 +273,7 @@ pub const DataType = enum {
 pub const DefaultValue = union(enum) {
     Literal: Value,
     FunctionCall: FunctionCall,
-    
+
     pub fn deinit(self: DefaultValue, allocator: std.mem.Allocator) void {
         switch (self) {
             .Literal => |value| value.deinit(allocator),
@@ -286,7 +286,7 @@ pub const DefaultValue = union(enum) {
 pub const FunctionCall = struct {
     name: []const u8,
     arguments: []FunctionArgument,
-    
+
     pub fn deinit(self: FunctionCall, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         for (self.arguments) |arg| {
@@ -302,7 +302,7 @@ pub const FunctionArgument = union(enum) {
     String: []const u8,
     Column: []const u8,
     Parameter: u32,
-    
+
     pub fn deinit(self: FunctionArgument, allocator: std.mem.Allocator) void {
         switch (self) {
             .Literal => |value| value.deinit(allocator),
@@ -322,7 +322,7 @@ pub const ColumnConstraint = union(enum) {
     Default: DefaultValue,
     ForeignKey: ForeignKeyConstraint,
     Check: CheckConstraint,
-    
+
     pub fn deinit(self: ColumnConstraint, allocator: std.mem.Allocator) void {
         switch (self) {
             .Default => |default| default.deinit(allocator),
@@ -474,7 +474,7 @@ pub const ForeignKeyConstraint = struct {
     reference_column: []const u8,
     on_delete: ?ForeignKeyAction,
     on_update: ?ForeignKeyAction,
-    
+
     pub fn deinit(self: ForeignKeyConstraint, allocator: std.mem.Allocator) void {
         if (self.column) |col| {
             allocator.free(col);
@@ -495,7 +495,7 @@ pub const ForeignKeyAction = enum {
 /// Check constraint
 pub const CheckConstraint = struct {
     condition: Condition,
-    
+
     pub fn deinit(self: CheckConstraint, allocator: std.mem.Allocator) void {
         _ = self;
         _ = allocator;
@@ -509,7 +509,7 @@ pub const TableConstraint = union(enum) {
     Unique: UniqueConstraint,
     Check: CheckConstraint,
     PrimaryKey: PrimaryKeyConstraint,
-    
+
     pub fn deinit(self: TableConstraint, allocator: std.mem.Allocator) void {
         switch (self) {
             .ForeignKey => |fk| fk.deinit(allocator),
@@ -523,7 +523,7 @@ pub const TableConstraint = union(enum) {
 /// Multi-column unique constraint
 pub const UniqueConstraint = struct {
     columns: [][]const u8,
-    
+
     pub fn deinit(self: UniqueConstraint, allocator: std.mem.Allocator) void {
         for (self.columns) |column| {
             allocator.free(column);
@@ -535,7 +535,7 @@ pub const UniqueConstraint = struct {
 /// Multi-column primary key constraint
 pub const PrimaryKeyConstraint = struct {
     columns: [][]const u8,
-    
+
     pub fn deinit(self: PrimaryKeyConstraint, allocator: std.mem.Allocator) void {
         for (self.columns) |column| {
             allocator.free(column);
@@ -547,7 +547,7 @@ pub const PrimaryKeyConstraint = struct {
 /// Transaction statement
 pub const TransactionStatement = struct {
     savepoint_name: ?[]const u8,
-    
+
     pub fn deinit(self: *TransactionStatement, allocator: std.mem.Allocator) void {
         if (self.savepoint_name) |name| {
             allocator.free(name);
@@ -562,7 +562,7 @@ pub const CreateIndexStatement = struct {
     columns: [][]const u8,
     unique: bool,
     if_not_exists: bool,
-    
+
     pub fn deinit(self: *CreateIndexStatement, allocator: std.mem.Allocator) void {
         allocator.free(self.index_name);
         allocator.free(self.table_name);
@@ -577,7 +577,7 @@ pub const CreateIndexStatement = struct {
 pub const DropIndexStatement = struct {
     index_name: []const u8,
     if_exists: bool,
-    
+
     pub fn deinit(self: *DropIndexStatement, allocator: std.mem.Allocator) void {
         allocator.free(self.index_name);
     }
@@ -588,7 +588,7 @@ pub const WithStatement = struct {
     cte_definitions: []CTEDefinition,
     recursive: bool,
     main_query: SelectStatement,
-    
+
     pub fn deinit(self: *WithStatement, allocator: std.mem.Allocator) void {
         for (self.cte_definitions) |*cte| {
             cte.deinit(allocator);
@@ -603,7 +603,7 @@ pub const CTEDefinition = struct {
     name: []const u8,
     column_names: ?[][]const u8, // Optional column list
     query: SelectStatement,
-    
+
     pub fn deinit(self: *CTEDefinition, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         if (self.column_names) |cols| {
@@ -621,7 +621,7 @@ pub const WindowFunction = struct {
     function_type: WindowFunctionType,
     arguments: []FunctionArgument,
     window_spec: WindowSpecification,
-    
+
     pub fn deinit(self: *WindowFunction, allocator: std.mem.Allocator) void {
         for (self.arguments) |arg| {
             arg.deinit(allocator);
@@ -652,7 +652,7 @@ pub const WindowSpecification = struct {
     partition_by: ?[][]const u8, // PARTITION BY columns
     order_by: ?[]OrderByClause, // ORDER BY within window
     frame_clause: ?FrameClause, // Window frame specification
-    
+
     pub fn deinit(self: *WindowSpecification, allocator: std.mem.Allocator) void {
         if (self.window_name) |name| {
             allocator.free(name);
@@ -680,7 +680,7 @@ pub const FrameClause = struct {
     frame_type: FrameType,
     start_bound: FrameBound,
     end_bound: ?FrameBound,
-    
+
     pub fn deinit(self: *FrameClause, allocator: std.mem.Allocator) void {
         _ = self;
         _ = allocator;
@@ -708,7 +708,7 @@ pub const FrameBound = enum {
 pub const WindowDefinition = struct {
     name: []const u8,
     specification: WindowSpecification,
-    
+
     pub fn deinit(self: *WindowDefinition, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         self.specification.deinit(allocator);
@@ -721,47 +721,44 @@ pub const UUIDUtils = struct {
     pub fn generateV4(random: std.Random) [16]u8 {
         var uuid: [16]u8 = undefined;
         random.bytes(&uuid);
-        
+
         // Set version to 4 (random UUID)
         uuid[6] = (uuid[6] & 0x0F) | 0x40;
-        
+
         // Set variant bits
         uuid[8] = (uuid[8] & 0x3F) | 0x80;
-        
+
         return uuid;
     }
-    
+
     /// Parse UUID from string representation
     pub fn parseFromString(uuid_str: []const u8) ![16]u8 {
         if (uuid_str.len != 36) return error.InvalidUUIDFormat;
-        
+
         var uuid: [16]u8 = undefined;
         var uuid_idx: usize = 0;
         var str_idx: usize = 0;
-        
+
         while (str_idx < uuid_str.len and uuid_idx < 16) {
             if (uuid_str[str_idx] == '-') {
                 str_idx += 1;
                 continue;
             }
-            
+
             if (str_idx + 1 >= uuid_str.len) return error.InvalidUUIDFormat;
-            
-            uuid[uuid_idx] = try std.fmt.parseInt(u8, uuid_str[str_idx..str_idx + 2], 16);
+
+            uuid[uuid_idx] = try std.fmt.parseInt(u8, uuid_str[str_idx .. str_idx + 2], 16);
             uuid_idx += 1;
             str_idx += 2;
         }
-        
+
         if (uuid_idx != 16) return error.InvalidUUIDFormat;
         return uuid;
     }
-    
+
     /// Convert UUID to string representation
     pub fn toString(uuid: [16]u8, allocator: std.mem.Allocator) ![]u8 {
-        return try std.fmt.allocPrint(allocator, 
-            "{x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}",
-            .{ uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5], uuid[6], uuid[7],
-               uuid[8], uuid[9], uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15] });
+        return try std.fmt.allocPrint(allocator, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5], uuid[6], uuid[7], uuid[8], uuid[9], uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15] });
     }
 };
 
@@ -776,16 +773,16 @@ test "uuid generation and parsing" {
         break :blk seed;
     });
     const random = prng.random();
-    
+
     // Test UUID generation
     const uuid = UUIDUtils.generateV4(random);
     try std.testing.expect(uuid.len == 16);
-    
+
     // Test UUID string conversion
     const uuid_str = try UUIDUtils.toString(uuid, std.testing.allocator);
     defer std.testing.allocator.free(uuid_str);
     try std.testing.expect(uuid_str.len == 36);
-    
+
     // Test UUID parsing
     const parsed_uuid = try UUIDUtils.parseFromString(uuid_str);
     try std.testing.expectEqualSlices(u8, &uuid, &parsed_uuid);

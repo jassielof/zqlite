@@ -15,9 +15,9 @@ pub const PreparedStatement = struct {
     execution_count: u64,
     total_execution_time_us: u64,
     cache: ?*query_cache.QueryCache,
-    
+
     const Self = @This();
-    
+
     /// Create a new prepared statement
     pub fn init(allocator: std.mem.Allocator, sql: []const u8, statement: ast.Statement, cache: ?*query_cache.QueryCache) !*Self {
         const stmt = try allocator.create(Self);
@@ -31,32 +31,32 @@ pub const PreparedStatement = struct {
         stmt.execution_count = 0;
         stmt.total_execution_time_us = 0;
         stmt.cache = cache;
-        
+
         // Analyze statement for parameters and optimization opportunities
         try stmt.analyzeStatement();
-        
+
         return stmt;
     }
-    
+
     /// Bind parameter to the prepared statement
     pub fn bindParameter(self: *Self, index: u32, value: storage.Value) !void {
         if (index >= self.parameter_count) {
             return error.ParameterIndexOutOfBounds;
         }
-        
+
         // Type checking - ensure the bound value matches expected type
         const expected_type = self.parameter_types[index];
         const actual_type = self.valueToParameterType(value);
-        
+
         if (!self.isTypeCompatible(expected_type, actual_type)) {
             return error.ParameterTypeMismatch;
         }
-        
-        // Store the bound parameter (simplified - in a real implementation, 
+
+        // Store the bound parameter (simplified - in a real implementation,
         // we'd have a parameter storage mechanism)
         // TODO: Store the bound parameter
     }
-    
+
     /// Execute the prepared statement with bound parameters
     pub fn execute(self: *Self, connection: anytype) !ExecutionResult {
         const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
@@ -102,26 +102,26 @@ pub const PreparedStatement = struct {
 
         return result;
     }
-    
+
     /// Analyze the statement for parameters and optimization
     fn analyzeStatement(self: *Self) !void {
         self.parameter_count = self.countParameters();
-        
+
         if (self.parameter_count > 0) {
             self.parameter_types = try self.allocator.alloc(ParameterType, self.parameter_count);
             try self.inferParameterTypes();
         }
-        
+
         // Create execution plan for complex queries
         if (self.shouldCreateExecutionPlan()) {
             self.execution_plan = try self.createExecutionPlan();
         }
     }
-    
+
     /// Count parameter placeholders in the statement
     fn countParameters(self: *Self) u32 {
         var count: u32 = 0;
-        
+
         switch (self.statement) {
             .Select => |select| {
                 for (select.columns) |column| {
@@ -148,21 +148,21 @@ pub const PreparedStatement = struct {
             },
             else => {},
         }
-        
+
         return count;
     }
-    
+
     /// Count parameters in column expression
     fn countParametersInExpression(self: *Self, expr: ast.ColumnExpression) u32 {
         _ = self;
         return switch (expr) {
             .Simple => 0,
             .Aggregate => 0, // Simplified
-            .Window => 0, // Simplified  
+            .Window => 0, // Simplified
             .FunctionCall => 0, // Simplified
         };
     }
-    
+
     /// Count parameters in condition
     fn countParametersInCondition(self: *Self, condition: ast.Condition) u32 {
         return switch (condition) {
@@ -173,12 +173,12 @@ pub const PreparedStatement = struct {
                 return count;
             },
             .Logical => |logical| {
-                return self.countParametersInCondition(logical.left.*) + 
-                       self.countParametersInCondition(logical.right.*);
+                return self.countParametersInCondition(logical.left.*) +
+                    self.countParametersInCondition(logical.right.*);
             },
         };
     }
-    
+
     /// Infer parameter types from context
     fn inferParameterTypes(self: *Self) !void {
         // Simplified implementation - in practice, we'd do more sophisticated type inference
@@ -186,27 +186,27 @@ pub const PreparedStatement = struct {
             param_type.* = ParameterType.Any; // Default to any type
         }
     }
-    
+
     /// Check if we should create an execution plan
     fn shouldCreateExecutionPlan(self: *Self) bool {
         return switch (self.statement) {
             .Select => |select| {
                 // Create plan for queries with joins, complex WHERE clauses, etc.
-                return select.joins.len > 0 or 
-                       (select.where_clause != null) or 
-                       (select.group_by != null) or
-                       (select.order_by != null);
+                return select.joins.len > 0 or
+                    (select.where_clause != null) or
+                    (select.group_by != null) or
+                    (select.order_by != null);
             },
             else => false,
         };
     }
-    
+
     /// Create execution plan for optimization
     fn createExecutionPlan(self: *Self) !*ExecutionPlan {
         const plan = try self.allocator.create(ExecutionPlan);
         plan.allocator = self.allocator;
         plan.steps = .{};
-        
+
         switch (self.statement) {
             .Select => |select| {
                 try self.buildSelectPlan(plan, select);
@@ -261,13 +261,13 @@ pub const PreparedStatement = struct {
         // Step 8: Projection (select columns)
         try plan.steps.append(plan.allocator, ExecutionStep{ .Projection = {} });
     }
-    
+
     /// Execute statement using execution plan
     fn executeWithPlan(self: *Self, plan: *ExecutionPlan, connection: anytype) !ExecutionResult {
         _ = self;
         _ = plan;
         _ = connection;
-        
+
         // Simplified implementation - would actually execute the plan steps
         return ExecutionResult{
             .rows = &[_]storage.Row{},
@@ -276,12 +276,12 @@ pub const PreparedStatement = struct {
             .was_cached = false,
         };
     }
-    
+
     /// Execute statement directly (fallback)
     fn executeStatement(self: *Self, connection: anytype) !ExecutionResult {
         _ = self;
         _ = connection;
-        
+
         // This would interface with the actual query executor
         return ExecutionResult{
             .rows = &[_]storage.Row{},
@@ -290,7 +290,7 @@ pub const PreparedStatement = struct {
             .was_cached = false,
         };
     }
-    
+
     /// Check if this is a SELECT statement
     fn isSelectStatement(self: *Self) bool {
         return switch (self.statement) {
@@ -298,7 +298,7 @@ pub const PreparedStatement = struct {
             else => false,
         };
     }
-    
+
     /// Convert storage value to parameter type
     fn valueToParameterType(self: *Self, value: storage.Value) ParameterType {
         _ = self;
@@ -315,13 +315,13 @@ pub const PreparedStatement = struct {
             else => ParameterType.Any,
         };
     }
-    
+
     /// Check if types are compatible
     fn isTypeCompatible(self: *Self, expected: ParameterType, actual: ParameterType) bool {
         _ = self;
         return expected == ParameterType.Any or expected == actual;
     }
-    
+
     /// Clone rows for caching
     fn cloneRows(self: *Self, rows: []storage.Row) ![]storage.Row {
         const cloned = try self.allocator.alloc(storage.Row, rows.len);
@@ -332,14 +332,14 @@ pub const PreparedStatement = struct {
         }
         return cloned;
     }
-    
+
     /// Get execution statistics
     pub fn getStats(self: *Self) PreparedStatementStats {
         const avg_execution_time = if (self.execution_count > 0)
             self.total_execution_time_us / self.execution_count
         else
             0;
-            
+
         return PreparedStatementStats{
             .execution_count = self.execution_count,
             .total_execution_time_us = self.total_execution_time_us,
@@ -348,21 +348,21 @@ pub const PreparedStatement = struct {
             .has_execution_plan = self.execution_plan != null,
         };
     }
-    
+
     /// Cleanup prepared statement
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.sql);
         self.statement.deinit(self.allocator);
-        
+
         if (self.parameter_types.len > 0) {
             self.allocator.free(self.parameter_types);
         }
-        
+
         if (self.execution_plan) |plan| {
             plan.deinit(self.allocator);
             self.allocator.destroy(plan);
         }
-        
+
         self.allocator.destroy(self);
     }
 };
@@ -412,7 +412,7 @@ pub const ExecutionResult = struct {
     affected_rows: u32,
     execution_time_us: u64,
     was_cached: bool,
-    
+
     pub fn deinit(self: *ExecutionResult, allocator: std.mem.Allocator) void {
         for (self.rows) |*row| {
             row.deinit(allocator);
@@ -432,7 +432,7 @@ pub const PreparedStatementStats = struct {
 
 test "prepared statement creation and analysis" {
     const allocator = std.testing.allocator;
-    
+
     // Create a simple SELECT statement AST
     const select_stmt = ast.SelectStatement{
         .columns = &[_]ast.Column{},
@@ -446,13 +446,13 @@ test "prepared statement creation and analysis" {
         .offset = null,
         .window_definitions = null,
     };
-    
+
     const statement = ast.Statement{ .Select = select_stmt };
     const sql = "SELECT * FROM users WHERE id = ?";
-    
+
     const prepared = try PreparedStatement.init(allocator, sql, statement, null);
     defer prepared.deinit();
-    
+
     const stats = prepared.getStats();
     try std.testing.expect(stats.parameter_count == 0); // Our simplified analysis doesn't detect ?
     try std.testing.expect(stats.execution_count == 0);

@@ -29,9 +29,7 @@ fn demoMigrationSystem(allocator: std.mem.Allocator, conn: *zqlite.Connection) !
 
     // Define migrations for a typical GhostMesh setup
     const migrations = [_]zqlite.migration.Migration{
-        zqlite.migration.createMigration(
-            1,
-            "create_users_table",
+        zqlite.migration.createMigration(1, "create_users_table",
             \\CREATE TABLE users (
             \\    id TEXT PRIMARY KEY,
             \\    email TEXT UNIQUE NOT NULL,
@@ -40,27 +38,16 @@ fn demoMigrationSystem(allocator: std.mem.Allocator, conn: *zqlite.Connection) !
             \\    last_login INTEGER,
             \\    mfa_enabled INTEGER DEFAULT 0
             \\)
-            ,
-            "DROP TABLE users"
-        ),
-        zqlite.migration.createMigration(
-            2,
-            "create_sessions_table",
+        , "DROP TABLE users"),
+        zqlite.migration.createMigration(2, "create_sessions_table",
             \\CREATE TABLE sessions (
             \\    id TEXT PRIMARY KEY,
             \\    user_id TEXT NOT NULL,
             \\    expires_at INTEGER NOT NULL,
             \\    created_at INTEGER DEFAULT (strftime('%s','now'))
             \\)
-            ,
-            "DROP TABLE sessions"
-        ),
-        zqlite.migration.createMigration(
-            3,
-            "add_groups_support",
-            "ALTER TABLE users ADD COLUMN groups TEXT",
-            "ALTER TABLE users DROP COLUMN groups"
-        ),
+        , "DROP TABLE sessions"),
+        zqlite.migration.createMigration(3, "add_groups_support", "ALTER TABLE users ADD COLUMN groups TEXT", "ALTER TABLE users DROP COLUMN groups"),
     };
 
     var migration_manager = zqlite.migration.MigrationManager.init(allocator, conn, &migrations);
@@ -70,8 +57,7 @@ fn demoMigrationSystem(allocator: std.mem.Allocator, conn: *zqlite.Connection) !
 
     // Get status
     const status = try migration_manager.getStatus();
-    std.debug.print("   ✅ Applied {d}/{d} migrations (current version: {d})\n", 
-        .{ status.applied_migrations, status.total_migrations, status.current_version });
+    std.debug.print("   ✅ Applied {d}/{d} migrations (current version: {d})\n", .{ status.applied_migrations, status.total_migrations, status.current_version });
 }
 
 /// Test improved CREATE TABLE with DEFAULT clauses that were failing before
@@ -79,7 +65,7 @@ fn demoImprovedCreateTable(conn: *zqlite.Connection) !void {
     std.debug.print("🛠️  Testing Improved CREATE TABLE...\n", .{});
 
     // This SQL was failing in the wishlist - now it works!
-    const sql_with_defaults = 
+    const sql_with_defaults =
         \\CREATE TABLE IF NOT EXISTS audit_log (
         \\    id INTEGER PRIMARY KEY,
         \\    action TEXT NOT NULL,
@@ -93,7 +79,7 @@ fn demoImprovedCreateTable(conn: *zqlite.Connection) !void {
     std.debug.print("   ✅ Successfully created table with strftime() DEFAULT clause\n", .{});
 
     // Test other DEFAULT patterns
-    const complex_defaults_sql = 
+    const complex_defaults_sql =
         \\CREATE TABLE temp_test (
         \\    id INTEGER DEFAULT 42,
         \\    status TEXT DEFAULT 'active',
@@ -119,10 +105,10 @@ fn demoSimplifiedParameterBinding(conn: *zqlite.Connection) !void {
     // try stmt.bindParameter(0, zqlite.storage.Value{ .Text = "user123" });
 
     // New simplified way - auto-type detection!
-    try stmt.bind(0, "user123");              // String -> Text
-    try stmt.bind(1, "user@example.com");     // String -> Text  
-    try stmt.bind(2, "John Doe");             // String -> Text
-    try stmt.bind(3, 1);                      // Integer -> Integer
+    try stmt.bind(0, "user123"); // String -> Text
+    try stmt.bind(1, "user@example.com"); // String -> Text
+    try stmt.bind(2, "John Doe"); // String -> Text
+    try stmt.bind(3, 1); // Integer -> Integer
 
     _ = try stmt.execute(conn);
     std.debug.print("   ✅ Simplified binding: auto-detected types\n", .{});

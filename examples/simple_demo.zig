@@ -9,24 +9,17 @@ pub fn main() !void {
     std.debug.print("🎉 ZQLite v1.2.3 Enhanced SQL Parser Demo\n\n", .{});
 
     // Test parsing enhanced SQL features
-    const test_cases = [_][]const u8{
-        "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created DATETIME DEFAULT CURRENT_TIMESTAMP)",
-        "BEGIN TRANSACTION",
-        "INSERT OR IGNORE INTO users (name) VALUES ('John')",
-        "CREATE UNIQUE INDEX idx_name ON users (name)",
-        "SELECT COUNT(*) FROM users WHERE active = 1",
-        "COMMIT"
-    };
+    const test_cases = [_][]const u8{ "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created DATETIME DEFAULT CURRENT_TIMESTAMP)", "BEGIN TRANSACTION", "INSERT OR IGNORE INTO users (name) VALUES ('John')", "CREATE UNIQUE INDEX idx_name ON users (name)", "SELECT COUNT(*) FROM users WHERE active = 1", "COMMIT" };
 
     for (test_cases) |sql| {
         std.debug.print("✅ Parsing: {s}\n", .{sql});
-        
+
         var result = parser.parse(allocator, sql) catch |err| {
             std.debug.print("   ❌ Parse error: {}\n", .{err});
             continue;
         };
         defer result.deinit();
-        
+
         std.debug.print("   ✓ Successfully parsed as: {s}\n\n", .{@tagName(result.statement)});
     }
 

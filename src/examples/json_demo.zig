@@ -14,9 +14,9 @@ pub fn main() !void {
 
     // Create table with JSON and JSONB columns
     try conn.execute("CREATE TABLE products (id INTEGER, metadata JSON, config JSONB);");
-    
+
     // Test JSON data
-    const json_data = 
+    const json_data =
         \\{
         \\  "name": "Laptop",
         \\  "category": "Electronics",
@@ -30,8 +30,8 @@ pub fn main() !void {
         \\  "in_stock": true
         \\}
     ;
-    
-    const config_data = 
+
+    const config_data =
         \\{
         \\  "settings": {
         \\    "theme": "dark",
@@ -52,9 +52,7 @@ pub fn main() !void {
     const json_value = zqlite.storage.Value{ .JSON = json_data_copy };
 
     // Create JSONB value with parsed structure
-    const jsonb_value = zqlite.storage.Value{ 
-        .JSONB = try zqlite.storage.JSONBValue.init(allocator, config_data) 
-    };
+    const jsonb_value = zqlite.storage.Value{ .JSONB = try zqlite.storage.JSONBValue.init(allocator, config_data) };
     defer jsonb_value.JSONB.deinit(allocator);
 
     try stmt.bindParameter(0, zqlite.storage.Value{ .Integer = 1 });
@@ -69,12 +67,12 @@ pub fn main() !void {
 
     // Test JSONB operations
     std.debug.print("\n📝 JSONB Operations:\n", .{});
-    
+
     // Convert JSONB back to string
     const jsonb_str = try jsonb_value.JSONB.toString(allocator);
     defer allocator.free(jsonb_str);
     std.debug.print("JSONB as string: {s}\n", .{jsonb_str});
-    
+
     // Test different JSON values
     const test_cases = [_]struct {
         name: []const u8,
@@ -85,55 +83,55 @@ pub fn main() !void {
         .{ .name = "Nested", .json = "{\"outer\": {\"inner\": [1, 2]}}" },
         .{ .name = "Mixed Types", .json = "{\"string\": \"test\", \"number\": 42, \"bool\": true, \"null\": null}" },
     };
-    
+
     for (test_cases, 0..) |test_case, i| {
         std.debug.print("\nTest {}: {s}\n", .{ i + 1, test_case.name });
-        
+
         // Test JSON parsing and storage
         const json_copy = try allocator.dupe(u8, test_case.json);
         defer allocator.free(json_copy);
         _ = zqlite.storage.Value{ .JSON = json_copy };
-        
+
         // Test JSONB parsing and storage
         const jsonb_val = zqlite.storage.JSONBValue.init(allocator, test_case.json) catch |err| {
             std.debug.print("  ❌ JSONB parse error: {}\n", .{err});
             continue;
         };
         defer jsonb_val.deinit(allocator);
-        
+
         const roundtrip = try jsonb_val.toString(allocator);
         defer allocator.free(roundtrip);
-        
+
         std.debug.print("  Original: {s}\n", .{test_case.json});
         std.debug.print("  JSONB:    {s}\n", .{roundtrip});
         std.debug.print("  ✅ Success\n", .{});
     }
-    
+
     std.debug.print("\n🎯 JSON/JSONB functionality is working!\n", .{});
-    
+
     // Test actual JSON operations
     std.debug.print("\n🔍 Real JSON Operations:\n", .{});
-    
+
     // Test JSON path extraction (-> operator)
     if (try jsonb_value.JSONB.extractPath(allocator, "theme")) |theme_json| {
         defer allocator.free(theme_json);
         std.debug.print("  config->'theme' = {s}\n", .{theme_json});
     }
-    
-    // Test JSON text extraction (->> operator) 
+
+    // Test JSON text extraction (->> operator)
     if (try jsonb_value.JSONB.extractText(allocator, "language")) |lang_text| {
         defer allocator.free(lang_text);
         std.debug.print("  config->>'language' = {s}\n", .{lang_text});
     }
-    
+
     // Test key existence (? operator)
     const has_theme = jsonb_value.JSONB.hasKey("theme");
     const has_missing = jsonb_value.JSONB.hasKey("missing_key");
     std.debug.print("  config ? 'theme' = {}\n", .{has_theme});
     std.debug.print("  config ? 'missing_key' = {}\n", .{has_missing});
-    
+
     // Test nested object access
-    const nested_json = 
+    const nested_json =
         \\{
         \\  "user": {
         \\    "profile": {
@@ -144,18 +142,18 @@ pub fn main() !void {
         \\  }
         \\}
     ;
-    
+
     const nested_jsonb = zqlite.storage.JSONBValue.init(allocator, nested_json) catch |err| {
         std.debug.print("  ❌ Nested JSON parse error: {}\n", .{err});
         return;
     };
     defer nested_jsonb.deinit(allocator);
-    
+
     // Test nested path access
     if (try nested_jsonb.extractText(allocator, "user")) |user_data| {
-        defer allocator.free(user_data);  
+        defer allocator.free(user_data);
         std.debug.print("  nested->'user' = {s}\n", .{user_data});
     }
-    
+
     std.debug.print("\n✅ JSON/JSONB query operations working!\n", .{});
 }

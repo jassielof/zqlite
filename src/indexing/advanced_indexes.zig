@@ -1144,20 +1144,20 @@ pub const BloomFilter = struct {
     /// Add a value to the bloom filter
     pub fn add(self: *Self, value: storage.Value) !void {
         const hashes = try self.getHashes(value);
-        
+
         for (0..self.hash_functions) |i| {
             const hash = hashes[i % hashes.len];
             const index = hash % self.size;
             self.bit_array[index] = true;
         }
-        
+
         self.item_count += 1;
     }
 
     /// Check if a value might exist (can have false positives, no false negatives)
     pub fn mightContain(self: *Self, value: storage.Value) !bool {
         const hashes = try self.getHashes(value);
-        
+
         for (0..self.hash_functions) |i| {
             const hash = hashes[i % hashes.len];
             const index = hash % self.size;
@@ -1165,29 +1165,29 @@ pub const BloomFilter = struct {
                 return false; // Definitely not present
             }
         }
-        
+
         return true; // Might be present
     }
 
     /// Generate multiple hash values for a storage value
     fn getHashes(self: *Self, value: storage.Value) ![8]u64 {
         var hashes: [8]u64 = undefined;
-        
+
         // Primary hash using Wyhash
         var hasher1 = std.hash.Wyhash.init(0);
         self.updateHasherWithValue(&hasher1, value);
         hashes[0] = hasher1.final();
-        
+
         // Secondary hash using different seed
         var hasher2 = std.hash.Wyhash.init(0x9e3779b97f4a7c15);
         self.updateHasherWithValue(&hasher2, value);
         hashes[1] = hasher2.final();
-        
+
         // Generate additional hashes using double hashing technique
         for (2..8) |i| {
             hashes[i] = hashes[0] +% (@as(u64, @intCast(i)) * hashes[1]);
         }
-        
+
         return hashes;
     }
 
@@ -1272,7 +1272,7 @@ pub const BloomHashIndex = struct {
         if (!(try self.bloom_filter.mightContain(value))) {
             return &[_]storage.RowId{}; // Definitely not present
         }
-        
+
         // Might be present, check hash index
         return try self.hash_index.lookup(value);
     }

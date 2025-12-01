@@ -296,31 +296,31 @@ const LogEntry = struct {
     /// Serialize log entry to bytes
     fn serialize(self: LogEntry, buffer: []u8) ![]const u8 {
         var pos: usize = 0;
-        
+
         // Write header
         buffer[pos] = @intFromEnum(self.entry_type);
         pos += 1;
-        
+
         std.mem.writeInt(u64, buffer[pos..][0..8], self.transaction_id, .little);
         pos += 8;
-        
+
         std.mem.writeInt(u32, buffer[pos..][0..4], self.page_id, .little);
         pos += 4;
-        
+
         std.mem.writeInt(u32, buffer[pos..][0..4], self.offset, .little);
         pos += 4;
 
         // Write data lengths
         std.mem.writeInt(u32, buffer[pos..][0..4], @intCast(self.old_data.len), .little);
         pos += 4;
-        
+
         std.mem.writeInt(u32, buffer[pos..][0..4], @intCast(self.new_data.len), .little);
         pos += 4;
 
         // Write data
         @memcpy(buffer[pos..][0..self.old_data.len], self.old_data);
         pos += self.old_data.len;
-        
+
         @memcpy(buffer[pos..][0..self.new_data.len], self.new_data);
         pos += self.new_data.len;
 
@@ -330,39 +330,39 @@ const LogEntry = struct {
     /// Deserialize log entry from bytes
     fn deserialize(allocator: std.mem.Allocator, buffer: []const u8) !LogEntry {
         if (buffer.len < 25) return error.BufferTooSmall;
-        
+
         var pos: usize = 0;
 
         // Read header
         const entry_type: LogEntryType = @enumFromInt(buffer[pos]);
         pos += 1;
-        
+
         const transaction_id = std.mem.readInt(u64, buffer[pos..][0..8], .little);
         pos += 8;
-        
+
         const page_id = std.mem.readInt(u32, buffer[pos..][0..4], .little);
         pos += 4;
-        
+
         const offset = std.mem.readInt(u32, buffer[pos..][0..4], .little);
         pos += 4;
 
         // Read data lengths
         const old_data_len = std.mem.readInt(u32, buffer[pos..][0..4], .little);
         pos += 4;
-        
+
         const new_data_len = std.mem.readInt(u32, buffer[pos..][0..4], .little);
         pos += 4;
 
         // Check buffer has enough data
         if (buffer.len < pos + old_data_len + new_data_len) return error.BufferTooSmall;
-        
+
         // Read data
         const old_data = try allocator.alloc(u8, old_data_len);
         const new_data = try allocator.alloc(u8, new_data_len);
 
         @memcpy(old_data, buffer[pos..][0..old_data_len]);
         pos += old_data_len;
-        
+
         @memcpy(new_data, buffer[pos..][0..new_data_len]);
 
         return LogEntry{

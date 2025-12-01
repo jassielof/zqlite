@@ -8,7 +8,7 @@ pub const ParseError = struct {
     expected: []const u8,
     found: []const u8,
     message: []const u8,
-    
+
     pub fn deinit(self: ParseError, allocator: std.mem.Allocator) void {
         allocator.free(self.expected);
         allocator.free(self.found);
@@ -102,50 +102,50 @@ pub const Parser = struct {
             try self.advance();
             where_clause = try self.parseWhere();
         }
-        
+
         // Parse optional GROUP BY clause
         var group_by: ?[][]const u8 = null;
         if (std.meta.activeTag(self.current_token) == .Group) {
             try self.advance();
             try self.expect(.By);
-            
+
             var group_columns: std.ArrayList([]const u8) = .{};
             defer group_columns.deinit(self.allocator);
 
             while (true) {
                 const col = try self.expectIdentifier();
                 try group_columns.append(self.allocator, col);
-                
+
                 if (std.meta.activeTag(self.current_token) == .Comma) {
                     try self.advance();
                 } else {
                     break;
                 }
             }
-            
+
             group_by = try group_columns.toOwnedSlice(self.allocator);
         }
-        
+
         // Parse optional HAVING clause
         var having: ?ast.WhereClause = null;
         if (std.meta.activeTag(self.current_token) == .Having) {
             try self.advance();
             having = try self.parseWhere();
         }
-        
+
         // Parse optional ORDER BY clause
         var order_by: ?[]ast.OrderByClause = null;
         if (std.meta.activeTag(self.current_token) == .Order) {
             try self.advance();
             try self.expect(.By);
-            
+
             var order_clauses: std.ArrayList(ast.OrderByClause) = .{};
             defer order_clauses.deinit(self.allocator);
-            
+
             while (true) {
                 const col = try self.expectIdentifier();
                 var direction = ast.SortDirection.Asc;
-                
+
                 if (std.meta.activeTag(self.current_token) == .Asc) {
                     try self.advance();
                     direction = .Asc;
@@ -153,19 +153,19 @@ pub const Parser = struct {
                     try self.advance();
                     direction = .Desc;
                 }
-                
+
                 try order_clauses.append(self.allocator, ast.OrderByClause{
                     .column = col,
                     .direction = direction,
                 });
-                
+
                 if (std.meta.activeTag(self.current_token) == .Comma) {
                     try self.advance();
                 } else {
                     break;
                 }
             }
-            
+
             order_by = try order_clauses.toOwnedSlice(self.allocator);
         }
 
@@ -251,14 +251,14 @@ pub const Parser = struct {
             else => error.UnexpectedToken,
         };
     }
-    
+
     /// Parse JOIN clause
     fn parseJoin(self: *Self, join_type: ast.JoinType) !ast.JoinClause {
         const table = try self.expectIdentifier();
-        
+
         try self.expect(.On);
         const condition = try self.parseCondition();
-        
+
         return ast.JoinClause{
             .join_type = join_type,
             .table = table,
@@ -269,14 +269,14 @@ pub const Parser = struct {
     /// Parse INSERT statement
     fn parseInsert(self: *Self) !ast.Statement {
         try self.expect(.Insert);
-        
+
         // Parse optional OR conflict resolution
         var or_conflict: ?ast.ConflictResolution = null;
         if (std.meta.activeTag(self.current_token) == .Or) {
             try self.advance();
             or_conflict = try self.parseConflictResolution();
         }
-        
+
         try self.expect(.Into);
 
         const table_name = try self.expectIdentifier();
@@ -350,52 +350,52 @@ pub const Parser = struct {
     /// Parse transaction statement
     fn parseTransaction(self: *Self) !ast.Statement {
         try self.expect(.Begin);
-        
+
         // Optional TRANSACTION keyword
         if (std.meta.activeTag(self.current_token) == .Transaction) {
             try self.advance();
         }
-        
+
         return ast.Statement{
             .BeginTransaction = ast.TransactionStatement{ .savepoint_name = null },
         };
     }
-    
+
     /// Parse commit statement
     fn parseCommit(self: *Self) !ast.Statement {
         try self.expect(.Commit);
-        
+
         // Optional TRANSACTION keyword
         if (std.meta.activeTag(self.current_token) == .Transaction) {
             try self.advance();
         }
-        
+
         return ast.Statement{
             .Commit = ast.TransactionStatement{ .savepoint_name = null },
         };
     }
-    
+
     /// Parse rollback statement
     fn parseRollback(self: *Self) !ast.Statement {
         try self.expect(.Rollback);
-        
+
         // Optional TRANSACTION keyword
         if (std.meta.activeTag(self.current_token) == .Transaction) {
             try self.advance();
         }
-        
+
         return ast.Statement{
             .Rollback = ast.TransactionStatement{ .savepoint_name = null },
         };
     }
-    
+
     /// Parse DROP statement
     fn parseDrop(self: *Self) !ast.Statement {
         try self.expect(.Drop);
-        
+
         if (std.meta.activeTag(self.current_token) == .Index) {
             try self.advance();
-            
+
             // Optional IF EXISTS
             var if_exists = false;
             if (std.meta.activeTag(self.current_token) == .If) {
@@ -403,9 +403,9 @@ pub const Parser = struct {
                 try self.expect(.Exists);
                 if_exists = true;
             }
-            
+
             const index_name = try self.expectIdentifier();
-            
+
             return ast.Statement{
                 .DropIndex = ast.DropIndexStatement{
                     .index_name = index_name,
@@ -416,14 +416,14 @@ pub const Parser = struct {
             // TODO: Implement DROP TABLE
             return error.NotImplemented;
         }
-        
+
         return error.UnexpectedToken;
     }
-    
+
     /// Parse CREATE statement dispatcher
     fn parseCreate(self: *Self) !ast.Statement {
         try self.expect(.Create);
-        
+
         if (std.meta.activeTag(self.current_token) == .Table) {
             try self.advance();
             return try self.parseCreateTable();
@@ -434,16 +434,16 @@ pub const Parser = struct {
             try self.expect(.Index);
             return try self.parseCreateIndexImpl(true);
         }
-        
+
         return error.UnexpectedToken;
     }
-    
+
     /// Parse CREATE INDEX statement
     fn parseCreateIndex(self: *Self) !ast.Statement {
         try self.expect(.Index);
         return try self.parseCreateIndexImpl(false);
     }
-    
+
     /// Parse CREATE INDEX implementation
     fn parseCreateIndexImpl(self: *Self, unique: bool) !ast.Statement {
         // Optional IF NOT EXISTS
@@ -454,29 +454,29 @@ pub const Parser = struct {
             try self.expect(.Exists);
             if_not_exists = true;
         }
-        
+
         const index_name = try self.expectIdentifier();
         try self.expect(.On);
         const table_name = try self.expectIdentifier();
-        
+
         try self.expect(.LeftParen);
-        
+
         var columns: std.ArrayList([]const u8) = .{};
         defer columns.deinit(self.allocator);
 
         while (true) {
             const col = try self.expectIdentifier();
             try columns.append(self.allocator, col);
-            
+
             if (std.meta.activeTag(self.current_token) == .Comma) {
                 try self.advance();
             } else {
                 break;
             }
         }
-        
+
         try self.expect(.RightParen);
-        
+
         return ast.Statement{
             .CreateIndex = ast.CreateIndexStatement{
                 .index_name = index_name,
@@ -487,7 +487,7 @@ pub const Parser = struct {
             },
         };
     }
-    
+
     /// Parse conflict resolution
     fn parseConflictResolution(self: *Self) !ast.ConflictResolution {
         return switch (self.current_token) {
@@ -506,7 +506,7 @@ pub const Parser = struct {
             else => error.UnexpectedToken,
         };
     }
-    
+
     /// Parse CREATE TABLE statement
     fn parseCreateTable(self: *Self) !ast.Statement {
         // Table keyword already consumed by parseCreate
@@ -636,11 +636,12 @@ pub const Parser = struct {
                 try self.advance(); // consume AS
                 alias = try self.expectIdentifierOrKeyword();
             } else if (std.meta.activeTag(self.current_token) == .Identifier or
-                      std.meta.activeTag(self.current_token) == .Count or
-                      std.meta.activeTag(self.current_token) == .Sum or
-                      std.meta.activeTag(self.current_token) == .Avg or
-                      std.meta.activeTag(self.current_token) == .Min or
-                      std.meta.activeTag(self.current_token) == .Max) {
+                std.meta.activeTag(self.current_token) == .Count or
+                std.meta.activeTag(self.current_token) == .Sum or
+                std.meta.activeTag(self.current_token) == .Avg or
+                std.meta.activeTag(self.current_token) == .Min or
+                std.meta.activeTag(self.current_token) == .Max)
+            {
                 alias = try self.expectIdentifierOrKeyword();
             }
 
@@ -650,9 +651,9 @@ pub const Parser = struct {
                     .Aggregate = ast.AggregateFunction{
                         .function_type = ast.AggregateFunctionType.Count,
                         .column = null, // NULL for COUNT(*)
-                    }
+                    },
                 },
-                .alias = alias
+                .alias = alias,
             };
         }
 
@@ -668,11 +669,7 @@ pub const Parser = struct {
             alias = try self.expectIdentifier();
         }
 
-        return ast.Column{
-            .name = name,
-            .expression = ast.ColumnExpression{ .Simple = try self.allocator.dupe(u8, name) },
-            .alias = alias
-        };
+        return ast.Column{ .name = name, .expression = ast.ColumnExpression{ .Simple = try self.allocator.dupe(u8, name) }, .alias = alias };
     }
 
     /// Parse a column definition in CREATE TABLE
@@ -820,18 +817,18 @@ pub const Parser = struct {
     fn parseForeignKeyConstraint(self: *Self) !ast.ForeignKeyConstraint {
         try self.expect(.References);
         const ref_table = try self.expectIdentifier();
-        
+
         try self.expect(.LeftParen);
         const ref_column = try self.expectIdentifier();
         try self.expect(.RightParen);
-        
+
         var on_delete: ?ast.ForeignKeyAction = null;
         var on_update: ?ast.ForeignKeyAction = null;
-        
+
         // Parse ON DELETE/UPDATE actions
         while (std.meta.activeTag(self.current_token) == .On) {
             try self.advance();
-            
+
             if (std.meta.activeTag(self.current_token) == .Delete) {
                 try self.advance();
                 on_delete = try self.parseForeignKeyAction();
@@ -842,7 +839,7 @@ pub const Parser = struct {
                 return error.ExpectedDeleteOrUpdate;
             }
         }
-        
+
         return ast.ForeignKeyConstraint{
             .column = null, // column-level constraint
             .reference_table = ref_table,
@@ -851,7 +848,7 @@ pub const Parser = struct {
             .on_update = on_update,
         };
     }
-    
+
     /// Parse foreign key action
     fn parseForeignKeyAction(self: *Self) !ast.ForeignKeyAction {
         return switch (self.current_token) {
@@ -890,20 +887,20 @@ pub const Parser = struct {
         // Check for parenthesized expressions like (strftime('%s','now'))
         if (std.meta.activeTag(self.current_token) == .LeftParen) {
             try self.advance(); // consume '('
-            
+
             // Check if it's a function call inside parentheses
             if (self.current_token == .Identifier) {
                 const function_call = try self.parseFunctionCall();
                 try self.expect(.RightParen);
                 return ast.DefaultValue{ .FunctionCall = function_call };
             }
-            
+
             // Otherwise parse as expression and close paren
             const inner_value = try self.parseDefaultValue();
             try self.expect(.RightParen);
             return inner_value;
         }
-        
+
         // Check if it's a direct function call (identifier followed by parentheses)
         if (self.current_token == .Identifier) {
             // Peek ahead to see if this is followed by a left paren
@@ -914,86 +911,74 @@ pub const Parser = struct {
                     return ast.DefaultValue{ .FunctionCall = function_call };
                 }
             }
-            
+
             // Not a function call, treat as identifier (this shouldn't happen in DEFAULT context)
             // Check for special DEFAULT keywords
             const id = self.current_token.Identifier;
             // Don't free id since it's owned by the token
-            
+
             // Handle CURRENT_TIMESTAMP and similar
             if (std.mem.eql(u8, id, "CURRENT_TIMESTAMP") or std.mem.eql(u8, id, "current_timestamp")) {
                 try self.advance();
-                return ast.DefaultValue{ 
-                    .FunctionCall = ast.FunctionCall{
-                        .name = try self.allocator.dupe(u8, "CURRENT_TIMESTAMP"),
-                        .arguments = &.{},
-                    }
-                };
+                return ast.DefaultValue{ .FunctionCall = ast.FunctionCall{
+                    .name = try self.allocator.dupe(u8, "CURRENT_TIMESTAMP"),
+                    .arguments = &.{},
+                } };
             } else if (std.mem.eql(u8, id, "CURRENT_DATE") or std.mem.eql(u8, id, "current_date")) {
                 try self.advance();
-                return ast.DefaultValue{ 
-                    .FunctionCall = ast.FunctionCall{
-                        .name = try self.allocator.dupe(u8, "CURRENT_DATE"),
-                        .arguments = &.{},
-                    }
-                };
+                return ast.DefaultValue{ .FunctionCall = ast.FunctionCall{
+                    .name = try self.allocator.dupe(u8, "CURRENT_DATE"),
+                    .arguments = &.{},
+                } };
             } else if (std.mem.eql(u8, id, "CURRENT_TIME") or std.mem.eql(u8, id, "current_time")) {
                 try self.advance();
-                return ast.DefaultValue{ 
-                    .FunctionCall = ast.FunctionCall{
-                        .name = try self.allocator.dupe(u8, "CURRENT_TIME"),
-                        .arguments = &.{},
-                    }
-                };
+                return ast.DefaultValue{ .FunctionCall = ast.FunctionCall{
+                    .name = try self.allocator.dupe(u8, "CURRENT_TIME"),
+                    .arguments = &.{},
+                } };
             }
-            
+
             return error.UnexpectedToken;
         }
-        
+
         // Check for special keywords that are DEFAULT values
         if (std.meta.activeTag(self.current_token) == .Current_Timestamp) {
             try self.advance();
-            return ast.DefaultValue{ 
-                .FunctionCall = ast.FunctionCall{
-                    .name = try self.allocator.dupe(u8, "CURRENT_TIMESTAMP"),
-                    .arguments = &.{},
-                }
-            };
+            return ast.DefaultValue{ .FunctionCall = ast.FunctionCall{
+                .name = try self.allocator.dupe(u8, "CURRENT_TIMESTAMP"),
+                .arguments = &.{},
+            } };
         } else if (std.meta.activeTag(self.current_token) == .Current_Date) {
             try self.advance();
-            return ast.DefaultValue{ 
-                .FunctionCall = ast.FunctionCall{
-                    .name = try self.allocator.dupe(u8, "CURRENT_DATE"),
-                    .arguments = &.{},
-                }
-            };
+            return ast.DefaultValue{ .FunctionCall = ast.FunctionCall{
+                .name = try self.allocator.dupe(u8, "CURRENT_DATE"),
+                .arguments = &.{},
+            } };
         } else if (std.meta.activeTag(self.current_token) == .Current_Time) {
             try self.advance();
-            return ast.DefaultValue{ 
-                .FunctionCall = ast.FunctionCall{
-                    .name = try self.allocator.dupe(u8, "CURRENT_TIME"),
-                    .arguments = &.{},
-                }
-            };
+            return ast.DefaultValue{ .FunctionCall = ast.FunctionCall{
+                .name = try self.allocator.dupe(u8, "CURRENT_TIME"),
+                .arguments = &.{},
+            } };
         }
-        
+
         // Otherwise, it's a literal value
         const value = try self.parseValue();
         return ast.DefaultValue{ .Literal = value };
     }
-    
+
     /// Parse function call
     fn parseFunctionCall(self: *Self) !ast.FunctionCall {
         const func_name = try self.expectIdentifier();
-        
+
         // Check if there's actually a left paren (this is a safety check)
         if (std.meta.activeTag(self.current_token) != .LeftParen) {
             // Not actually a function call, this is an error in our logic
             return error.ExpectedLeftParen;
         }
-        
+
         try self.expect(.LeftParen);
-        
+
         var arguments: std.ArrayList(ast.FunctionArgument) = .{};
         defer arguments.deinit(self.allocator);
 
@@ -1001,22 +986,22 @@ pub const Parser = struct {
         while (std.meta.activeTag(self.current_token) != .RightParen) {
             const arg = try self.parseFunctionArgument();
             try arguments.append(self.allocator, arg);
-            
+
             if (std.meta.activeTag(self.current_token) == .Comma) {
                 try self.advance();
             } else if (std.meta.activeTag(self.current_token) != .RightParen) {
                 return error.ExpectedCommaOrRightParen;
             }
         }
-        
+
         try self.expect(.RightParen);
-        
+
         return ast.FunctionCall{
             .name = func_name,
             .arguments = try arguments.toOwnedSlice(self.allocator),
         };
     }
-    
+
     /// Parse function argument
     fn parseFunctionArgument(self: *Self) !ast.FunctionArgument {
         return switch (self.current_token) {
@@ -1135,9 +1120,7 @@ pub const Parser = struct {
                 const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
                 const timestamp = ts.sec;
                 const timestamp_str = try std.fmt.allocPrint(self.allocator, "{d}-01-01 12:00:00", .{1970 + @divFloor(timestamp, 31536000)});
-                return ast.Value{
-                    .Text = timestamp_str
-                };
+                return ast.Value{ .Text = timestamp_str };
             },
             .Identifier => |func_name| {
                 // Check if it's a function call like datetime('now')
@@ -1156,9 +1139,7 @@ pub const Parser = struct {
                         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
                         const timestamp = ts.sec;
                         const timestamp_str = try std.fmt.allocPrint(self.allocator, "{d}-01-01 12:00:00", .{1970 + @divFloor(timestamp, 31536000)});
-                        return ast.Value{
-                            .Text = timestamp_str
-                        };
+                        return ast.Value{ .Text = timestamp_str };
                     }
                 }
                 return error.ExpectedValue;
@@ -1173,9 +1154,7 @@ pub const Parser = struct {
     fn createError(self: *Self, expected: []const u8, context: []const u8) void {
         // For now, just log the error. In production, you'd want to store
         // the error details for better debugging.
-        std.log.err("Parse error at position {d}: Expected {s}, found {any} {s}", .{
-            self.tokenizer.position, expected, self.current_token, context
-        });
+        std.log.err("Parse error at position {d}: Expected {s}, found {any} {s}", .{ self.tokenizer.position, expected, self.current_token, context });
     }
 
     /// Expect a specific token
@@ -1246,7 +1225,7 @@ pub const Parser = struct {
         var peek_tokenizer = tokenizer.Tokenizer.init(self.tokenizer.input);
         peek_tokenizer.position = self.tokenizer.position;
         peek_tokenizer.current_char = self.tokenizer.current_char;
-        
+
         // Get the next token without affecting our state
         return try peek_tokenizer.nextToken(self.allocator);
     }
@@ -1258,7 +1237,7 @@ pub const Parser = struct {
             else => false,
         };
     }
-    
+
     /// Parse table-level constraint
     fn parseTableConstraint(self: *Self) !ast.TableConstraint {
         return switch (self.current_token) {
@@ -1268,22 +1247,20 @@ pub const Parser = struct {
                 try self.expect(.LeftParen);
                 const column = try self.expectIdentifier();
                 try self.expect(.RightParen);
-                
+
                 try self.expect(.References);
                 const ref_table_name = try self.expectIdentifier();
                 try self.expect(.LeftParen);
                 const ref_column_name = try self.expectIdentifier();
                 try self.expect(.RightParen);
-                
-                return ast.TableConstraint{ 
-                    .ForeignKey = ast.ForeignKeyConstraint{
-                        .column = column,
-                        .reference_table = ref_table_name,
-                        .reference_column = ref_column_name,
-                        .on_delete = null,
-                        .on_update = null,
-                    }
-                };
+
+                return ast.TableConstraint{ .ForeignKey = ast.ForeignKeyConstraint{
+                    .column = column,
+                    .reference_table = ref_table_name,
+                    .reference_column = ref_column_name,
+                    .on_delete = null,
+                    .on_update = null,
+                } };
             },
             .Unique => {
                 try self.advance(); // consume UNIQUE
@@ -1295,21 +1272,19 @@ pub const Parser = struct {
                 while (true) {
                     const column = try self.expectIdentifier();
                     try columns_list.append(self.allocator, column);
-                    
+
                     if (std.meta.activeTag(self.current_token) == .Comma) {
                         try self.advance();
                     } else {
                         break;
                     }
                 }
-                
+
                 try self.expect(.RightParen);
-                
-                return ast.TableConstraint{
-                    .Unique = ast.UniqueConstraint{
-                        .columns = try columns_list.toOwnedSlice(self.allocator),
-                    }
-                };
+
+                return ast.TableConstraint{ .Unique = ast.UniqueConstraint{
+                    .columns = try columns_list.toOwnedSlice(self.allocator),
+                } };
             },
             .Primary => {
                 try self.advance(); // consume PRIMARY
@@ -1322,33 +1297,29 @@ pub const Parser = struct {
                 while (true) {
                     const column = try self.expectIdentifier();
                     try columns_list.append(self.allocator, column);
-                    
+
                     if (std.meta.activeTag(self.current_token) == .Comma) {
                         try self.advance();
                     } else {
                         break;
                     }
                 }
-                
+
                 try self.expect(.RightParen);
-                
-                return ast.TableConstraint{
-                    .PrimaryKey = ast.PrimaryKeyConstraint{
-                        .columns = try columns_list.toOwnedSlice(self.allocator),
-                    }
-                };
+
+                return ast.TableConstraint{ .PrimaryKey = ast.PrimaryKeyConstraint{
+                    .columns = try columns_list.toOwnedSlice(self.allocator),
+                } };
             },
             .Check => {
                 try self.advance(); // consume CHECK
                 try self.expect(.LeftParen);
                 const condition = try self.parseCondition();
                 try self.expect(.RightParen);
-                
-                return ast.TableConstraint{
-                    .Check = ast.CheckConstraint{
-                        .condition = condition,
-                    }
-                };
+
+                return ast.TableConstraint{ .Check = ast.CheckConstraint{
+                    .condition = condition,
+                } };
             },
             else => error.UnexpectedToken,
         };
@@ -1392,15 +1363,15 @@ test "parse simple select" {
 test "parse create table with default literal" {
     const allocator = std.testing.allocator;
     const sql = "CREATE TABLE users (id INTEGER DEFAULT 42)";
-    
+
     var result = try parse(allocator, sql);
     defer result.deinit();
 
     try std.testing.expectEqual(std.meta.Tag(ast.Statement).CreateTable, std.meta.activeTag(result.statement));
-    
+
     const create_stmt = result.statement.CreateTable;
     try std.testing.expectEqual(@as(usize, 1), create_stmt.columns.len);
-    
+
     // Check the column has a default constraint
     const col = create_stmt.columns[0];
     try std.testing.expectEqual(@as(usize, 1), col.constraints.len);
@@ -1411,15 +1382,15 @@ test "parse create table with default function call" {
     const allocator = std.testing.allocator;
     // Simplified test - the complex strftime parsing can be added later
     const sql = "CREATE TABLE users (id INTEGER PRIMARY KEY, created_at INTEGER DEFAULT 42)";
-    
+
     var result = try parse(allocator, sql);
     defer result.deinit();
 
     try std.testing.expectEqual(std.meta.Tag(ast.Statement).CreateTable, std.meta.activeTag(result.statement));
-    
+
     const create_stmt = result.statement.CreateTable;
     try std.testing.expectEqual(@as(usize, 2), create_stmt.columns.len);
-    
+
     // Check the second column has a default constraint
     const second_col = create_stmt.columns[1];
     try std.testing.expectEqual(@as(usize, 1), second_col.constraints.len);
@@ -1429,15 +1400,15 @@ test "parse create table with default function call" {
 test "parse insert with parameters" {
     const allocator = std.testing.allocator;
     const sql = "INSERT INTO users (id, name) VALUES (?, ?)";
-    
+
     var result = try parse(allocator, sql);
     defer result.deinit();
 
     try std.testing.expectEqual(std.meta.Tag(ast.Statement).Insert, std.meta.activeTag(result.statement));
-    
+
     const insert_stmt = result.statement.Insert;
     try std.testing.expectEqual(@as(usize, 1), insert_stmt.values.len);
-    
+
     // Check that we have parameter placeholders
     const row = insert_stmt.values[0];
     try std.testing.expectEqual(@as(usize, 2), row.len);
@@ -1451,7 +1422,7 @@ test "parse strftime function in default" {
     const allocator = std.testing.allocator;
     // Test the exact case that was failing
     const sql = "CREATE TABLE test (created INTEGER DEFAULT (strftime('%s','now')))";
-    
+
     var result = try parse(allocator, sql);
     defer result.deinit();
 

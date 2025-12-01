@@ -11,16 +11,16 @@ pub fn main() !void {
 
     // Test 1: Parser improvements (DEFAULT clauses)
     std.debug.print("📝 Testing SQL Parser improvements...\n", .{});
-    
+
     const test_sql = "CREATE TABLE users (id INTEGER DEFAULT 42)";
     var parsed_result = try zqlite.parser.parse(allocator, test_sql);
     defer parsed_result.deinit();
-    
+
     std.debug.print("   ✅ Successfully parsed CREATE TABLE with DEFAULT\n", .{});
 
     // Test 2: Connection and prepared statement binding
     std.debug.print("⚡ Testing Simplified Parameter Binding...\n", .{});
-    
+
     var conn = try zqlite.openMemory();
     defer conn.deinit();
 
@@ -51,19 +51,14 @@ pub fn main() !void {
 
     // Test 4: Migration system (basic)
     std.debug.print("📦 Testing Migration System (basic)...\n", .{});
-    
+
     const migrations = [_]zqlite.migration.Migration{
-        zqlite.migration.createMigration(
-            1,
-            "add_email_column",
-            "ALTER TABLE test ADD COLUMN email TEXT",
-            "ALTER TABLE test DROP COLUMN email"
-        ),
+        zqlite.migration.createMigration(1, "add_email_column", "ALTER TABLE test ADD COLUMN email TEXT", "ALTER TABLE test DROP COLUMN email"),
     };
 
     var migration_manager = zqlite.migration.MigrationManager.init(allocator, conn, &migrations);
     const status = try migration_manager.getStatus();
-    
+
     std.debug.print("   ✅ Migration system initialized: {d} migrations available\n", .{status.total_migrations});
 
     std.debug.print("\n✅ All core features working correctly!\n", .{});

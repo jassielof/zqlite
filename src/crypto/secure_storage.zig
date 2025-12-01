@@ -183,40 +183,40 @@ pub const CryptoEngine = struct {
 
         const output = try self.allocator.alloc(u8, data.len + 16);
         const encrypted = try self.encryptData(data, output);
-        
+
         // Create combined format: nonce + ciphertext + tag
         const result = try self.allocator.alloc(u8, 12 + encrypted.ciphertext_len + 16);
         @memcpy(result[0..12], &encrypted.nonce);
-        @memcpy(result[12..12 + encrypted.ciphertext_len], output[0..encrypted.ciphertext_len]);
-        @memcpy(result[12 + encrypted.ciphertext_len..], &encrypted.tag);
-        
+        @memcpy(result[12 .. 12 + encrypted.ciphertext_len], output[0..encrypted.ciphertext_len]);
+        @memcpy(result[12 + encrypted.ciphertext_len ..], &encrypted.tag);
+
         self.allocator.free(output);
         return result;
     }
-    
+
     /// Decrypt data (convenience method for async operations)
     pub fn decrypt(self: *Self, encrypted_data: []const u8) ![]u8 {
         if (self.master_key == null) return error.NoMasterKey;
         if (encrypted_data.len < 12 + 16) return error.InvalidCiphertext;
-        
+
         const nonce = encrypted_data[0..12];
         const ciphertext_len = encrypted_data.len - 12 - 16;
-        const ciphertext = encrypted_data[12..12 + ciphertext_len];
-        const tag = encrypted_data[12 + ciphertext_len..][0..16];
-        
+        const ciphertext = encrypted_data[12 .. 12 + ciphertext_len];
+        const tag = encrypted_data[12 + ciphertext_len ..][0..16];
+
         const encrypted = EncryptedData{
             .ciphertext_len = ciphertext_len,
             .nonce = nonce.*,
             .tag = tag.*,
         };
-        
+
         const result = try self.allocator.alloc(u8, ciphertext_len);
         errdefer self.allocator.free(result);
-        
+
         try self.decryptData(encrypted, ciphertext, result);
         return result;
     }
-    
+
     /// Encrypt a field (convenience method for small data)
     pub fn encryptField(self: *Self, data: []const u8) ![]u8 {
         return self.encrypt(data);

@@ -28,7 +28,7 @@ pub const SQLiteCompat = struct {
     /// Process PRAGMA statements
     pub fn processPragma(self: *Self, pragma_name: []const u8, value: ?[]const u8) ![]storage.Row {
         var rows = std.ArrayList(storage.Row).init(self.allocator);
-        
+
         if (std.mem.eql(u8, pragma_name, "page_size")) {
             if (value) |val| {
                 self.pragma_settings.page_size = try std.fmt.parseInt(u32, val, 10);
@@ -201,7 +201,7 @@ pub const SQLiteCompat = struct {
         /// Extract value from JSON at path
         pub fn jsonExtract(allocator: std.mem.Allocator, json_text: []const u8, path: []const u8) !storage.Value {
             _ = allocator; // Remove unused variable warning
-            
+
             // Simple JSON extraction - in production, use a proper JSON parser
             if (std.mem.eql(u8, path, "$.name")) {
                 // Extract name field (simplified)
@@ -209,42 +209,42 @@ pub const SQLiteCompat = struct {
                     if (std.mem.indexOf(u8, json_text[start..], ":")) |colon_pos| {
                         const value_start = start + colon_pos + 1;
                         if (std.mem.indexOf(u8, json_text[value_start..], "\"")) |quote1| {
-                            if (std.mem.indexOf(u8, json_text[value_start + quote1 + 1..], "\"")) |quote2| {
-                                const name = json_text[value_start + quote1 + 1..value_start + quote1 + 1 + quote2];
+                            if (std.mem.indexOf(u8, json_text[value_start + quote1 + 1 ..], "\"")) |quote2| {
+                                const name = json_text[value_start + quote1 + 1 .. value_start + quote1 + 1 + quote2];
                                 return storage.Value{ .Text = name };
                             }
                         }
                     }
                 }
             }
-            
+
             return storage.Value.Null;
         }
 
         /// Set value in JSON at path
         pub fn jsonSet(allocator: std.mem.Allocator, json_text: []const u8, path: []const u8, new_value: []const u8) ![]u8 {
             _ = path; // Remove unused variable warning
-            
+
             // Simple JSON setting - in production, use a proper JSON parser
             var result = try allocator.dupe(u8, json_text);
-            
+
             // Replace the value (simplified implementation)
             if (std.mem.indexOf(u8, result, "\"name\"")) |start| {
                 if (std.mem.indexOf(u8, result[start..], ":")) |colon_pos| {
                     const value_start = start + colon_pos + 1;
                     if (std.mem.indexOf(u8, result[value_start..], "\"")) |quote1| {
-                        if (std.mem.indexOf(u8, result[value_start + quote1 + 1..], "\"")) |quote2| {
+                        if (std.mem.indexOf(u8, result[value_start + quote1 + 1 ..], "\"")) |quote2| {
                             // Replace the value between quotes
-                            const before = result[0..value_start + quote1 + 1];
-                            const after = result[value_start + quote1 + 1 + quote2..];
-                            
+                            const before = result[0 .. value_start + quote1 + 1];
+                            const after = result[value_start + quote1 + 1 + quote2 ..];
+
                             allocator.free(result);
                             result = try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ before, new_value, after });
                         }
                     }
                 }
             }
-            
+
             return result;
         }
 
@@ -253,7 +253,7 @@ pub const SQLiteCompat = struct {
             // Simple validation - check for balanced braces
             var brace_count: i32 = 0;
             var bracket_count: i32 = 0;
-            
+
             for (json_text) |char| {
                 switch (char) {
                     '{' => brace_count += 1,
@@ -262,12 +262,12 @@ pub const SQLiteCompat = struct {
                     ']' => bracket_count -= 1,
                     else => {},
                 }
-                
+
                 if (brace_count < 0 or bracket_count < 0) {
                     return false;
                 }
             }
-            
+
             return brace_count == 0 and bracket_count == 0;
         }
     };
@@ -275,10 +275,10 @@ pub const SQLiteCompat = struct {
     // Helper functions
     fn getTableInfo(self: *Self, table_name: []const u8) ![]storage.Row {
         _ = table_name; // Remove unused variable warning
-        
+
         // Return table schema information (simplified)
         var rows = std.ArrayList(storage.Row).init(self.allocator);
-        
+
         // Example table info row: cid, name, type, notnull, dflt_value, pk
         const values = [_]storage.Value{
             storage.Value{ .Integer = 0 },
@@ -288,15 +288,15 @@ pub const SQLiteCompat = struct {
             storage.Value.Null,
             storage.Value{ .Integer = 1 },
         };
-        
+
         try rows.append(storage.Row{ .values = try self.allocator.dupe(storage.Value, &values) });
-        
+
         return try rows.toOwnedSlice();
     }
 
     fn getDatabaseList(self: *Self) ![]storage.Row {
         var rows = std.ArrayList(storage.Row).init(self.allocator);
-        
+
         // Main database
         const main_values = [_]storage.Value{
             storage.Value{ .Integer = 0 },
@@ -304,7 +304,7 @@ pub const SQLiteCompat = struct {
             storage.Value{ .Text = "" },
         };
         try rows.append(storage.Row{ .values = try self.allocator.dupe(storage.Value, &main_values) });
-        
+
         // Attached databases
         var iterator = self.attached_databases.iterator();
         var seq: i64 = 1;
@@ -317,17 +317,17 @@ pub const SQLiteCompat = struct {
             try rows.append(storage.Row{ .values = try self.allocator.dupe(storage.Value, &values) });
             seq += 1;
         }
-        
+
         return try rows.toOwnedSlice();
     }
 
     fn tokenizeText(self: *Self, text: []const u8) ![][]const u8 {
         var words = std.ArrayList([]const u8).init(self.allocator);
         var word_start: ?usize = null;
-        
+
         for (text, 0..) |char, i| {
             const is_word_char = std.ascii.isAlphanumeric(char) or char == '_';
-            
+
             if (is_word_char and word_start == null) {
                 word_start = i;
             } else if (!is_word_char and word_start != null) {
@@ -340,7 +340,7 @@ pub const SQLiteCompat = struct {
                 word_start = null;
             }
         }
-        
+
         // Handle word at end of text
         if (word_start) |start| {
             const word = try self.allocator.dupe(u8, text[start..]);
@@ -349,7 +349,7 @@ pub const SQLiteCompat = struct {
             }
             try words.append(word);
         }
-        
+
         return try words.toOwnedSlice();
     }
 
@@ -381,7 +381,7 @@ const PragmaSettings = struct {
     cache_size: i32,
     journal_mode: []const u8,
     foreign_keys: bool,
-    
+
     pub fn default() PragmaSettings {
         return PragmaSettings{
             .page_size = 4096,
@@ -402,15 +402,15 @@ const FTSIndex = struct {
     columns: [][]const u8,
     documents: std.hash_map.HashMap(u64, FTSDocument, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
     inverted_index: std.hash_map.HashMap([]const u8, std.ArrayList(u64), std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
-    
+
     pub fn deinit(self: *FTSIndex, allocator: std.mem.Allocator) void {
         allocator.free(self.table_name);
-        
+
         for (self.columns) |column| {
             allocator.free(column);
         }
         allocator.free(self.columns);
-        
+
         var doc_iterator = self.documents.iterator();
         while (doc_iterator.next()) |entry| {
             for (entry.value_ptr.content) |content| {
@@ -419,7 +419,7 @@ const FTSIndex = struct {
             allocator.free(entry.value_ptr.content);
         }
         self.documents.deinit();
-        
+
         var idx_iterator = self.inverted_index.iterator();
         while (idx_iterator.next()) |entry| {
             allocator.free(entry.key_ptr.*);

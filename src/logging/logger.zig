@@ -2,7 +2,6 @@ const std = @import("std");
 
 /// Production-grade structured logging system for Zig 0.16
 /// Features: JSON/text formats, log levels, thread-safe, scoped loggers
-
 pub const LogLevel = enum(u8) {
     debug = 0,
     info = 1,

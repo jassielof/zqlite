@@ -74,7 +74,7 @@ pub const BTree = struct {
             // Find child to insert into using binary search
             const search_result = node.binarySearchKey(key);
             var child_index = search_result.index;
-            
+
             // If we found the exact key, we still need to go to the right child
             if (search_result.found) {
                 child_index += 1;
@@ -164,7 +164,7 @@ pub const BTree = struct {
 
         // Binary search for key
         const search_result = node.binarySearchKey(key);
-        
+
         if (search_result.found) {
             // Found exact key
             if (node.is_leaf) {
@@ -209,22 +209,24 @@ pub const BTree = struct {
                             break :blk storage.JSONBValue.init(self.allocator, "{}") catch unreachable;
                         } },
                         .UUID => |uuid| storage.Value{ .UUID = uuid },
-                        .Array => |array| storage.Value{ .Array = storage.ArrayValue{
-                            .element_type = array.element_type,
-                            .elements = blk: {
-                                var cloned_elements = try self.allocator.alloc(storage.Value, array.elements.len);
-                                for (array.elements, 0..) |elem, k| {
-                                    // Recursively clone array elements (simplified - could cause stack overflow for deeply nested arrays)
-                                    cloned_elements[k] = switch (elem) {
-                                        .Integer => |int| storage.Value{ .Integer = int },
-                                        .Text => |text| storage.Value{ .Text = try self.allocator.dupe(u8, text) },
-                                        .Real => |real| storage.Value{ .Real = real },
-                                        else => storage.Value.Null, // Simplified - handle complex nested types as null
-                                    };
-                                }
-                                break :blk cloned_elements;
+                        .Array => |array| storage.Value{
+                            .Array = storage.ArrayValue{
+                                .element_type = array.element_type,
+                                .elements = blk: {
+                                    var cloned_elements = try self.allocator.alloc(storage.Value, array.elements.len);
+                                    for (array.elements, 0..) |elem, k| {
+                                        // Recursively clone array elements (simplified - could cause stack overflow for deeply nested arrays)
+                                        cloned_elements[k] = switch (elem) {
+                                            .Integer => |int| storage.Value{ .Integer = int },
+                                            .Text => |text| storage.Value{ .Text = try self.allocator.dupe(u8, text) },
+                                            .Real => |real| storage.Value{ .Real = real },
+                                            else => storage.Value.Null, // Simplified - handle complex nested types as null
+                                        };
+                                    }
+                                    break :blk cloned_elements;
+                                },
                             },
-                        } },
+                        },
                         .Boolean => |bool_val| storage.Value{ .Boolean = bool_val },
                         .Timestamp => |ts| storage.Value{ .Timestamp = ts },
                         .TimestampTZ => |tstz| storage.Value{ .TimestampTZ = storage.TimestampTZValue{
@@ -444,7 +446,7 @@ pub const BTree = struct {
 
         // If it's an internal node, recursively clean up children
         if (!node.is_leaf) {
-            for (node.children[0..node.key_count + 1]) |child_page| {
+            for (node.children[0 .. node.key_count + 1]) |child_page| {
                 if (child_page > 0) {
                     self.cleanupNodeRecursive(child_page) catch {
                         // Continue cleanup even if some children fail
@@ -648,7 +650,7 @@ pub const Node = struct {
                 pos += 4;
             }
         }
-        
+
         return pos;
     }
 
@@ -829,23 +831,23 @@ pub const Node = struct {
                 },
             }
         }
-        
+
         return pos;
     }
 
     /// Deserialize node from bytes
     pub fn deserialize(allocator: std.mem.Allocator, buffer: []const u8, order: u32) !Self {
         if (buffer.len < 9) return error.BufferTooSmall; // Minimum header size
-        
+
         var pos: usize = 0;
 
         // Read header
         const is_leaf = buffer[pos] == 1;
         pos += 1;
-        
+
         const key_count = std.mem.readInt(u32, buffer[pos..][0..4], .little);
         pos += 4;
-        
+
         const stored_order = std.mem.readInt(u32, buffer[pos..][0..4], .little);
         pos += 4;
 
@@ -892,23 +894,23 @@ pub const Node = struct {
         value: storage.Row,
         bytes_read: usize,
     };
-    
+
     /// Deserialize a single value
     fn deserializeValue(allocator: std.mem.Allocator, buffer: []const u8) !DeserializeValueResult {
         if (buffer.len < 4) return error.BufferTooSmall;
-        
+
         var pos: usize = 0;
-        
+
         const value_count = std.mem.readInt(u32, buffer[pos..][0..4], .little);
         pos += 4;
-        
+
         var values = try allocator.alloc(storage.Value, value_count);
 
         for (0..value_count) |i| {
             if (buffer.len < pos + 1) return error.BufferTooSmall;
             const type_tag = buffer[pos];
             pos += 1;
-            
+
             values[i] = switch (type_tag) {
                 0 => storage.Value.Null,
                 1 => blk: {
@@ -979,11 +981,11 @@ pub const Node = struct {
 
 test "btree binary search performance" {
     const allocator = std.testing.allocator;
-    
+
     // Test binary search on node
     var node = try Node.initLeaf(allocator, 64);
     defer node.deinit(allocator);
-    
+
     // Insert keys in random order
     const keys = [_]u64{ 50, 25, 75, 12, 37, 62, 87, 6, 18, 31, 43, 56, 68, 81, 93 };
     for (keys) |key| {
@@ -992,14 +994,14 @@ test "btree binary search performance" {
         const value = storage.Row{ .values = values };
         node.insertKey(key, value);
     }
-    
+
     // Test binary search finds all keys
     for (keys) |key| {
         const result = node.binarySearchKey(key);
         try std.testing.expect(result.found);
         try std.testing.expectEqual(key, node.keys[result.index]);
     }
-    
+
     // Test binary search for non-existent keys
     const non_existent = [_]u64{ 1, 100, 49, 51 };
     for (non_existent) |key| {
@@ -1012,10 +1014,10 @@ test "btree creation and basic operations" {
     const allocator = std.testing.allocator;
     const pager_instance = try pager.Pager.initMemory(allocator);
     defer pager_instance.deinit();
-    
+
     const btree = try BTree.init(allocator, pager_instance);
     defer btree.deinit();
-    
+
     try std.testing.expect(btree.root_page > 0);
     try std.testing.expectEqual(@as(u32, 64), btree.order);
 }
@@ -1024,10 +1026,10 @@ test "btree insert and search comprehensive" {
     const allocator = std.testing.allocator;
     const pager_inst = try pager.Pager.initMemory(allocator);
     defer pager_inst.deinit();
-    
+
     const btree = try BTree.init(allocator, pager_inst);
     defer btree.deinit();
-    
+
     // Insert test data
     const test_keys = [_]u64{ 10, 20, 5, 15, 25, 3, 7, 12, 18, 22, 30 };
     for (test_keys, 0..) |key, i| {
@@ -1037,7 +1039,7 @@ test "btree insert and search comprehensive" {
         const value = storage.Row{ .values = values };
         try btree.insert(key, value);
     }
-    
+
     // Search for all inserted keys
     for (test_keys) |key| {
         const result = try btree.search(key);
@@ -1048,7 +1050,7 @@ test "btree insert and search comprehensive" {
             allocator.free(row.values);
         }
     }
-    
+
     // Search for non-existent key
     const not_found = try btree.search(999);
     try std.testing.expect(not_found == null);

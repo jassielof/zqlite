@@ -80,7 +80,7 @@ pub const Encryption = struct {
         secureZero(&self.key);
         secureZero(&self.salt);
     }
-    
+
     /// Securely zero memory to prevent sensitive data from remaining
     fn secureZero(buffer: []u8) void {
         @memset(buffer, 0);
@@ -182,40 +182,40 @@ pub const Encryption = struct {
 
 test "encryption with random salt" {
     _ = std.testing.allocator;
-    
+
     // Test encryption with random salt
     var enc1 = try Encryption.init("test_password", null);
     defer enc1.deinit();
-    
+
     var enc2 = try Encryption.init("test_password", null);
     defer enc2.deinit();
-    
+
     // Different instances should have different salts
     try std.testing.expect(!std.mem.eql(u8, &enc1.salt, &enc2.salt));
-    
+
     // Test encryption/decryption
     const plaintext = "Hello, ZQLite encryption!";
     var encrypted_buf: [1024]u8 = undefined;
     var decrypted_buf: [1024]u8 = undefined;
-    
+
     try enc1.encrypt(plaintext, &encrypted_buf);
     const encrypted_size = enc1.getEncryptedSize(plaintext.len);
-    
+
     try enc1.decrypt(encrypted_buf[0..encrypted_size], &decrypted_buf);
     const decrypted_size = enc1.getDecryptedSize(encrypted_size);
-    
+
     try std.testing.expectEqualStrings(plaintext, decrypted_buf[0..decrypted_size]);
 }
 
 test "encryption with provided salt" {
     const test_salt = [_]u8{1} ** 32;
-    
+
     var enc1 = try Encryption.init("password123", &test_salt);
     defer enc1.deinit();
-    
+
     var enc2 = try Encryption.initWithSalt("password123", test_salt);
     defer enc2.deinit();
-    
+
     // Both should have the same salt and key
     try std.testing.expectEqualSlices(u8, &enc1.salt, &enc2.salt);
     try std.testing.expectEqualSlices(u8, &enc1.key, &enc2.key);
@@ -224,12 +224,12 @@ test "encryption with provided salt" {
 test "plaintext mode" {
     var enc = Encryption.initPlain();
     defer enc.deinit();
-    
+
     try std.testing.expect(!enc.enabled);
-    
+
     const data = "unencrypted data";
     var output: [100]u8 = undefined;
-    
+
     try enc.encrypt(data, &output);
     try std.testing.expectEqualStrings(data, output[0..data.len]);
 }

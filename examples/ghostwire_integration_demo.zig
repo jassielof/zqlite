@@ -105,9 +105,7 @@ fn demonstratePeerRegistration(conn: *zqlite.Connection) !void {
 
     for (peers) |peer| {
         // Use parameterized queries for safety
-        var stmt = try conn.prepare(
-            "INSERT INTO peers (id, public_key, endpoints, last_seen, metadata) VALUES (?, ?, ?, ?, ?)"
-        );
+        var stmt = try conn.prepare("INSERT INTO peers (id, public_key, endpoints, last_seen, metadata) VALUES (?, ?, ?, ?, ?)");
         defer stmt.deinit();
 
         try stmt.bind(0, peer.id);

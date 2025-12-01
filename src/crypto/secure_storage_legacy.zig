@@ -52,7 +52,7 @@ pub const CryptoEngine = struct {
     /// Initialize with master key and post-quantum features
     pub fn initWithMasterKey(allocator: std.mem.Allocator, password: []const u8) !Self {
         var engine = Self.init(allocator);
-        
+
         // Derive master key using zcrypto v0.5.0 enhanced KDF
         const salt = "zqlite_v0.5.0_pq_salt";
         const info = "zqlite_database_master_key";
@@ -61,7 +61,7 @@ pub const CryptoEngine = struct {
 
         // Generate post-quantum key pairs for hybrid security
         engine.pq_keypair = try engine.generatePQKeyPair();
-        
+
         return engine;
     }
 
@@ -73,13 +73,13 @@ pub const CryptoEngine = struct {
 
         // Generate classical Ed25519 keys
         const ed25519_keypair = try shroud.asym.Ed25519.KeyPair.generate();
-        
-        // Generate classical X25519 keys  
+
+        // Generate classical X25519 keys
         const x25519_keypair = try shroud.asym.X25519.KeyPair.generate();
 
         // Generate post-quantum ML-KEM-768 keys
         const ml_kem_keypair = try shroud.pq.ml_kem.ML_KEM_768.KeyPair.generate(seed);
-        
+
         // Generate post-quantum ML-DSA-65 keys
         const ml_dsa_keypair = try shroud.pq.ml_dsa.ML_DSA_65.KeyPair.generate(seed);
 
@@ -125,13 +125,7 @@ pub const CryptoEngine = struct {
         var tag: [16]u8 = undefined;
 
         // Use ChaCha20-Poly1305 for high-performance authenticated encryption
-        try shroud.sym.chacha20_poly1305_encrypt(
-            plaintext,
-            &self.master_key.?,
-            &nonce,
-            ciphertext,
-            &tag
-        );
+        try shroud.sym.chacha20_poly1305_encrypt(plaintext, &self.master_key.?, &nonce, ciphertext, &tag);
 
         return EncryptedField{
             .nonce = nonce,
@@ -149,22 +143,10 @@ pub const CryptoEngine = struct {
 
         switch (encrypted.algorithm) {
             .ChaCha20Poly1305 => {
-                try shroud.sym.chacha20_poly1305_decrypt(
-                    encrypted.ciphertext,
-                    &self.master_key.?,
-                    &encrypted.nonce,
-                    &encrypted.tag,
-                    plaintext
-                );
+                try shroud.sym.chacha20_poly1305_decrypt(encrypted.ciphertext, &self.master_key.?, &encrypted.nonce, &encrypted.tag, plaintext);
             },
             .AES256GCM => {
-                try shroud.sym.aes256_gcm_decrypt(
-                    encrypted.ciphertext,
-                    &self.master_key.?,
-                    &encrypted.nonce,
-                    &encrypted.tag,
-                    plaintext
-                );
+                try shroud.sym.aes256_gcm_decrypt(encrypted.ciphertext, &self.master_key.?, &encrypted.nonce, &encrypted.tag, plaintext);
             },
         }
 
@@ -177,15 +159,9 @@ pub const CryptoEngine = struct {
 
         if (self.hybrid_mode) {
             // Hybrid mode: Sign with both classical and post-quantum algorithms
-            const classical_sig = try shroud.asym.Ed25519.KeyPair.sign(
-                &self.pq_keypair.?.classical.ed25519_keypair,
-                transaction_data
-            );
+            const classical_sig = try shroud.asym.Ed25519.KeyPair.sign(&self.pq_keypair.?.classical.ed25519_keypair, transaction_data);
 
-            const pq_sig = try shroud.pq.ml_dsa.ML_DSA_65.KeyPair.sign(
-                &self.pq_keypair.?.post_quantum.ml_dsa_keypair,
-                transaction_data
-            );
+            const pq_sig = try shroud.pq.ml_dsa.ML_DSA_65.KeyPair.sign(&self.pq_keypair.?.post_quantum.ml_dsa_keypair, transaction_data);
 
             return HybridSignature{
                 .classical_signature = classical_sig,
@@ -194,10 +170,7 @@ pub const CryptoEngine = struct {
             };
         } else {
             // Pure post-quantum mode
-            const pq_sig = try shroud.pq.ml_dsa.ML_DSA_65.KeyPair.sign(
-                &self.pq_keypair.?.post_quantum.ml_dsa_keypair,
-                transaction_data
-            );
+            const pq_sig = try shroud.pq.ml_dsa.ML_DSA_65.KeyPair.sign(&self.pq_keypair.?.post_quantum.ml_dsa_keypair, transaction_data);
 
             return HybridSignature{
                 .classical_signature = undefined,
@@ -214,33 +187,17 @@ pub const CryptoEngine = struct {
         switch (signature.mode) {
             .Hybrid => {
                 // Both signatures must be valid for hybrid mode
-                const classical_valid = try shroud.asym.Ed25519.verify(
-                    transaction_data,
-                    signature.classical_signature,
-                    self.pq_keypair.?.classical.ed25519_keypair.public_key
-                );
+                const classical_valid = try shroud.asym.Ed25519.verify(transaction_data, signature.classical_signature, self.pq_keypair.?.classical.ed25519_keypair.public_key);
 
-                const pq_valid = try shroud.pq.ml_dsa.ML_DSA_65.verify(
-                    transaction_data,
-                    signature.pq_signature,
-                    self.pq_keypair.?.post_quantum.ml_dsa_keypair.public_key
-                );
+                const pq_valid = try shroud.pq.ml_dsa.ML_DSA_65.verify(transaction_data, signature.pq_signature, self.pq_keypair.?.post_quantum.ml_dsa_keypair.public_key);
 
                 return classical_valid and pq_valid;
             },
             .PostQuantumOnly => {
-                return try shroud.pq.ml_dsa.ML_DSA_65.verify(
-                    transaction_data,
-                    signature.pq_signature,
-                    self.pq_keypair.?.post_quantum.ml_dsa_keypair.public_key
-                );
+                return try shroud.pq.ml_dsa.ML_DSA_65.verify(transaction_data, signature.pq_signature, self.pq_keypair.?.post_quantum.ml_dsa_keypair.public_key);
             },
             .ClassicalOnly => {
-                return try shroud.asym.Ed25519.verify(
-                    transaction_data,
-                    signature.classical_signature,
-                    self.pq_keypair.?.classical.ed25519_keypair.public_key
-                );
+                return try shroud.asym.Ed25519.verify(transaction_data, signature.classical_signature, self.pq_keypair.?.classical.ed25519_keypair.public_key);
             },
         }
     }
@@ -261,7 +218,7 @@ pub const CryptoEngine = struct {
         // Use BLAKE2b for high-performance secure hashing
         const hash_input = try self.allocator.alloc(u8, password.len + salt.len);
         defer self.allocator.free(hash_input);
-        
+
         @memcpy(hash_input[0..password.len], password);
         @memcpy(hash_input[password.len..], salt);
 
@@ -280,14 +237,14 @@ pub const CryptoEngine = struct {
     pub fn verifyPassword(self: *Self, password: []const u8, stored: PasswordHash) !bool {
         const hash_input = try self.allocator.alloc(u8, password.len + stored.salt.len);
         defer self.allocator.free(hash_input);
-        
+
         @memcpy(hash_input[0..password.len], password);
         @memcpy(hash_input[password.len..], stored.salt);
 
         switch (stored.algorithm) {
             .BLAKE2b => {
                 const computed_hash = shroud.hash.blake2b(hash_input);
-                
+
                 // Use constant-time comparison to prevent timing attacks
                 return shroud.util.constantTimeCompare(stored.hash, &computed_hash);
             },
@@ -305,12 +262,7 @@ pub const CryptoEngine = struct {
         const info = try std.fmt.allocPrint(self.allocator, "zqlite_table_key_{s}", .{table_name});
         defer self.allocator.free(info);
 
-        return try shroud.kdf.hkdfSha256(
-            &self.master_key.?,
-            "zqlite_v0.5.0_table_salt",
-            info,
-            32
-        );
+        return try shroud.kdf.hkdfSha256(&self.master_key.?, "zqlite_v0.5.0_table_salt", info, 32);
     }
 
     /// Generate cryptographically secure random tokens
@@ -338,13 +290,7 @@ pub const CryptoEngine = struct {
         const commitment = try self.createCommitment(value, &blinding);
 
         // Generate bulletproof range proof
-        const proof_data = try shroud.zkp.bulletproofs.proveRange(
-            self.allocator,
-            value,
-            &blinding,
-            min_value,
-            max_value
-        );
+        const proof_data = try shroud.zkp.bulletproofs.proveRange(self.allocator, value, &blinding, min_value, max_value);
 
         return ZKProof{
             .proof_type = .RangeProof,
@@ -358,12 +304,7 @@ pub const CryptoEngine = struct {
     pub fn verifyRangeProof(self: *Self, proof: ZKProof, min_value: u64, max_value: u64) !bool {
         if (!self.zkp_enabled) return error.ZKPNotEnabled;
 
-        return try shroud.zkp.bulletproofs.verifyRange(
-            proof.commitment,
-            proof.proof_data,
-            min_value,
-            max_value
-        );
+        return try shroud.zkp.bulletproofs.verifyRange(proof.commitment, proof.proof_data, min_value, max_value);
     }
 
     /// Create commitment for zero-knowledge proofs
@@ -372,7 +313,7 @@ pub const CryptoEngine = struct {
         const value_bytes = std.mem.asBytes(&value);
         const input = try self.allocator.alloc(u8, value_bytes.len + blinding.len);
         defer self.allocator.free(input);
-        
+
         @memcpy(input[0..value_bytes.len], value_bytes);
         @memcpy(input[value_bytes.len..], blinding);
 
@@ -386,12 +327,7 @@ pub const CryptoEngine = struct {
         var shared_secret: [64]u8 = undefined;
 
         // Perform hybrid X25519 + ML-KEM-768 key exchange
-        try shroud.pq.hybrid.x25519_ml_kem_768_kex(
-            &shared_secret,
-            &peer_classical_key,
-            &peer_pq_key,
-            &shroud.rand.generateSeed()
-        );
+        try shroud.pq.hybrid.x25519_ml_kem_768_kex(&shared_secret, &peer_classical_key, &peer_pq_key, &shroud.rand.generateSeed());
 
         return shared_secret;
     }

@@ -68,18 +68,18 @@ pub const Planner = struct {
                 if (column.expression == .Aggregate) {
                     try aggregates.append(self.allocator, AggregateOperation{
                         .function_type = column.expression.Aggregate.function_type,
-                        .column = if (column.expression.Aggregate.column) |col| 
-                            try self.allocator.dupe(u8, col) 
-                        else 
+                        .column = if (column.expression.Aggregate.column) |col|
+                            try self.allocator.dupe(u8, col)
+                        else
                             null,
-                        .alias = if (column.alias) |alias| 
-                            try self.allocator.dupe(u8, alias) 
-                        else 
+                        .alias = if (column.alias) |alias|
+                            try self.allocator.dupe(u8, alias)
+                        else
                             null,
                     });
                 }
             }
-            
+
             if (select.group_by) |group_by| {
                 // GROUP BY aggregation
                 var group_columns: std.ArrayList([]const u8) = .{};
@@ -149,7 +149,7 @@ pub const Planner = struct {
     fn planJoin(self: *Self, left_table: []const u8, join: *const ast.JoinClause) !ExecutionStep {
         // Try to determine if this is an equi-join for hash join optimization
         const equi_join_info = self.analyzeEquiJoin(&join.condition);
-        
+
         if (equi_join_info) |info| {
             // Use hash join for equi-joins (more efficient for larger datasets)
             return ExecutionStep{
@@ -267,12 +267,12 @@ pub const Planner = struct {
                     .Real => storage.DataType.Real,
                     .Blob => storage.DataType.Blob,
                     // Map extended types to their storage equivalents
-                    .DateTime => storage.DataType.Text,  // Store as ISO string
+                    .DateTime => storage.DataType.Text, // Store as ISO string
                     .Timestamp => storage.DataType.Integer, // Store as Unix timestamp
-                    .Boolean => storage.DataType.Integer,  // Store as 0/1
-                    .Date => storage.DataType.Text,       // Store as ISO date
-                    .Time => storage.DataType.Text,       // Store as ISO time
-                    .Decimal => storage.DataType.Real,    // Store as float
+                    .Boolean => storage.DataType.Integer, // Store as 0/1
+                    .Date => storage.DataType.Text, // Store as ISO date
+                    .Time => storage.DataType.Text, // Store as ISO time
+                    .Decimal => storage.DataType.Real, // Store as float
                     .Varchar => storage.DataType.Text,
                     .Char => storage.DataType.Text,
                     .Float => storage.DataType.Real,
@@ -444,7 +444,7 @@ pub const Planner = struct {
                 .if_not_exists = create_idx.if_not_exists,
             },
         });
-        
+
         return ExecutionPlan{
             .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
@@ -461,7 +461,7 @@ pub const Planner = struct {
                 .if_exists = drop_idx.if_exists,
             },
         });
-        
+
         return ExecutionPlan{
             .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
@@ -523,7 +523,7 @@ pub const Planner = struct {
         };
         return ast_storage_value.clone(self.allocator);
     }
-    
+
     /// Clone a default value (preserving FunctionCall for VM evaluation)
     fn cloneDefaultValue(self: *Self, default_value: ast.DefaultValue) !ast.DefaultValue {
         return switch (default_value) {
@@ -531,20 +531,20 @@ pub const Planner = struct {
             .FunctionCall => |function_call| ast.DefaultValue{ .FunctionCall = try self.cloneFunctionCall(function_call) },
         };
     }
-    
+
     /// Clone a function call
     fn cloneFunctionCall(self: *Self, function_call: ast.FunctionCall) anyerror!ast.FunctionCall {
         var cloned_args = try self.allocator.alloc(ast.FunctionArgument, function_call.arguments.len);
         for (function_call.arguments, 0..) |arg, i| {
             cloned_args[i] = try self.cloneFunctionArgument(arg);
         }
-        
+
         return ast.FunctionCall{
             .name = try self.allocator.dupe(u8, function_call.name),
             .arguments = cloned_args,
         };
     }
-    
+
     /// Clone a function argument
     fn cloneFunctionArgument(self: *Self, arg: ast.FunctionArgument) anyerror!ast.FunctionArgument {
         return switch (arg) {
@@ -554,7 +554,7 @@ pub const Planner = struct {
             .Parameter => |param_index| ast.FunctionArgument{ .Parameter = param_index },
         };
     }
-    
+
     /// Convert AST default value to storage default value
     fn convertAstDefaultToStorage(self: *Self, default_value: ast.DefaultValue) !storage.Column.DefaultValue {
         return switch (default_value) {
@@ -568,20 +568,20 @@ pub const Planner = struct {
             },
         };
     }
-    
+
     /// Convert AST function call to storage function call
     fn convertAstFunctionToStorage(self: *Self, function_call: ast.FunctionCall) !storage.Column.FunctionCall {
         var storage_args = try self.allocator.alloc(storage.Column.FunctionArgument, function_call.arguments.len);
         for (function_call.arguments, 0..) |arg, i| {
             storage_args[i] = try self.convertAstFunctionArgToStorage(arg);
         }
-        
+
         return storage.Column.FunctionCall{
             .name = try self.allocator.dupe(u8, function_call.name),
             .arguments = storage_args,
         };
     }
-    
+
     /// Convert AST function argument to storage function argument
     fn convertAstFunctionArgToStorage(self: *Self, arg: ast.FunctionArgument) anyerror!storage.Column.FunctionArgument {
         return switch (arg) {
@@ -616,7 +616,7 @@ pub const Planner = struct {
             .FunctionCall => |function_call| ast.Value{ .FunctionCall = try self.cloneFunctionCall(function_call) },
         };
     }
-    
+
     /// Plan Common Table Expression (WITH clause) execution
     fn planWith(self: *Self, with: *const ast.WithStatement) !ExecutionPlan {
         var steps: std.ArrayList(ExecutionStep) = .{};
@@ -854,7 +854,7 @@ pub const NestedLoopJoinStep = struct {
     left_table: []const u8,
     right_table: []const u8,
     condition: ast.Condition,
-    
+
     pub fn deinit(self: *NestedLoopJoinStep, allocator: std.mem.Allocator) void {
         allocator.free(self.left_table);
         allocator.free(self.right_table);
@@ -870,7 +870,7 @@ pub const HashJoinStep = struct {
     left_key_column: []const u8,
     right_key_column: []const u8,
     condition: ast.Condition,
-    
+
     pub fn deinit(self: *HashJoinStep, allocator: std.mem.Allocator) void {
         allocator.free(self.left_table);
         allocator.free(self.right_table);
@@ -883,7 +883,7 @@ pub const HashJoinStep = struct {
 /// Aggregate step (for aggregate functions without GROUP BY)
 pub const AggregateStep = struct {
     aggregates: []AggregateOperation,
-    
+
     pub fn deinit(self: *AggregateStep, allocator: std.mem.Allocator) void {
         for (self.aggregates) |*agg| {
             agg.deinit(allocator);
@@ -896,13 +896,13 @@ pub const AggregateStep = struct {
 pub const GroupByStep = struct {
     group_columns: [][]const u8,
     aggregates: []AggregateOperation,
-    
+
     pub fn deinit(self: *GroupByStep, allocator: std.mem.Allocator) void {
         for (self.group_columns) |col| {
             allocator.free(col);
         }
         allocator.free(self.group_columns);
-        
+
         for (self.aggregates) |*agg| {
             agg.deinit(allocator);
         }
@@ -915,7 +915,7 @@ pub const AggregateOperation = struct {
     function_type: ast.AggregateFunctionType,
     column: ?[]const u8, // NULL for COUNT(*)
     alias: ?[]const u8,
-    
+
     pub fn deinit(self: *AggregateOperation, allocator: std.mem.Allocator) void {
         if (self.column) |col| {
             allocator.free(col);
@@ -926,12 +926,12 @@ pub const AggregateOperation = struct {
     }
 };
 
-/// CTE creation step  
+/// CTE creation step
 pub const CreateCTEStep = struct {
     name: []const u8,
     plan: ExecutionPlan,
     recursive: bool,
-    
+
     pub fn deinit(self: *CreateCTEStep, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         self.plan.deinit();
