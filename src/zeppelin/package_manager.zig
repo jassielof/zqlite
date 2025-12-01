@@ -3,6 +3,12 @@ const storage = @import("../db/storage.zig");
 const connection = @import("../db/connection.zig");
 const crypto = @import("../zqlite.zig").crypto;
 
+/// Get current time in milliseconds using POSIX clock
+fn getMilliTimestamp() i64 {
+    const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 /// Zeppelin Package Manager integration for zqlite v1.2.5
 /// Provides package dependency tracking, version management, and integrity verification
 pub const ZeppelinPackageManager = struct {
@@ -121,7 +127,7 @@ pub const ZeppelinPackageManager = struct {
     
     /// Register a new package
     pub fn registerPackage(self: *Self, package: PackageInfo) !void {
-        const current_time = std.time.milliTimestamp();
+        const current_time = getMilliTimestamp();
         
         // Serialize metadata to JSON
         const metadata_json = try self.serializePackageMetadata(package.metadata);
@@ -206,7 +212,7 @@ pub const ZeppelinPackageManager = struct {
     
     /// Add a dependency
     pub fn addDependency(self: *Self, package_id: []const u8, dependency: Dependency) !void {
-        const current_time = std.time.milliTimestamp();
+        const current_time = getMilliTimestamp();
         
         const insert_sql = try std.fmt.allocPrint(self.allocator,
             "INSERT INTO zeppelin_dependencies " ++

@@ -10,9 +10,9 @@ pub const HotStandby = struct {
     allocator: std.mem.Allocator,
     role: NodeRole,
     primary_node: ?*Node,
-    standby_nodes: std.array_list.Managed(*Node),
+    standby_nodes: std.ArrayList(*Node),
     mvcc_manager: *mvcc.MVCCTransactionManager,
-    replication_log: std.array_list.Managed(ReplicationEntry),
+    replication_log: std.ArrayList(ReplicationEntry),
     heartbeat_manager: HeartbeatManager,
     failover_manager: FailoverManager,
     sync_state: SyncState,
@@ -25,9 +25,9 @@ pub const HotStandby = struct {
             .allocator = allocator,
             .role = .Standby,
             .primary_node = null,
-            .standby_nodes = std.array_list.Managed(*Node).init(allocator),
+            .standby_nodes = .{},
             .mvcc_manager = mvcc_manager,
-            .replication_log = std.array_list.Managed(ReplicationEntry).init(allocator),
+            .replication_log = .{},
             .heartbeat_manager = HeartbeatManager.init(allocator, node_id),
             .failover_manager = FailoverManager.init(allocator),
             .sync_state = SyncState.init(),
@@ -129,7 +129,7 @@ pub const HotStandby = struct {
         }
         
         // Add to replication log
-        try self.replication_log.append(entry);
+        try self.replication_log.append(self.allocator, entry);
 
         // Update sync state
         self.sync_state.last_applied_index = entry.index;
@@ -211,22 +211,28 @@ pub const HotStandby = struct {
         self.stopReplicatingToStandbys();
     }
     
+    /// Get current time in milliseconds using POSIX clock
+    fn getMilliTimestamp() i64 {
+        const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
+        return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    }
+
     /// Wait for all transactions to complete
     fn waitForTransactionsToComplete(self: *Self) !void {
-        const timeout_ms = 30000; // 30 second timeout
-        const start_time = std.time.milliTimestamp();
-        
+        const timeout_ms: i64 = 30000; // 30 second timeout
+        const start_time = getMilliTimestamp();
+
         while (true) {
             const active_transactions = self.mvcc_manager.getActiveTransactionCount();
             if (active_transactions == 0) {
                 break;
             }
-            
-            const elapsed = std.time.milliTimestamp() - start_time;
+
+            const elapsed = getMilliTimestamp() - start_time;
             if (elapsed > timeout_ms) {
                 return error.TransactionTimeout;
             }
-            
+
             std.Thread.sleep(100 * std.time.ns_per_ms);
         }
     }
@@ -365,8 +371,8 @@ pub const HotStandby = struct {
     }
     
     pub fn deinit(self: *Self) void {
-        self.standby_nodes.deinit();
-        self.replication_log.deinit();
+        self.standby_nodes.deinit(self.allocator);
+        self.replication_log.deinit(self.allocator);
         self.heartbeat_manager.deinit();
         self.failover_manager.deinit();
     }

@@ -208,18 +208,18 @@ pub const BatchProcessor = struct {
     /// Serialize a row for transport
     fn serializeRow(self: *Self, row: storage.Row) ![]u8 {
         // Simple serialization - in production this would be more efficient
-        var list = std.array_list.Managed(u8).init(self.allocator);
-        defer list.deinit();
-        
+        var list: std.ArrayList(u8) = .{};
+        defer list.deinit(self.allocator);
+
         // Write number of values
-        try list.writer().writeInt(u32, @intCast(row.values.len), .little);
-        
+        try list.writer(self.allocator).writeInt(u32, @intCast(row.values.len), .little);
+
         // Write each value
         for (row.values) |value| {
-            try self.serializeValue(list.writer(), value);
+            try self.serializeValue(list.writer(self.allocator), value);
         }
-        
-        return try list.toOwnedSlice();
+
+        return try list.toOwnedSlice(self.allocator);
     }
     
     /// Deserialize a row from transport
@@ -317,20 +317,20 @@ const VectorizedOperations = struct {
     
     /// Preprocess operations for vectorization
     pub fn preprocess(self: *Self, operations: []const BatchOperation) !VectorizedBatch {
-        var groups = std.array_list.Managed(OperationGroup).init(self.allocator);
+        var groups: std.ArrayList(OperationGroup) = .{};
         var current_type: ?OperationType = null;
         var current_group: ?OperationGroup = null;
-        var current_ops = std.array_list.Managed(BatchOperation).init(self.allocator);
-        
+        var current_ops: std.ArrayList(BatchOperation) = .{};
+
         for (operations, 0..) |op, i| {
             if (current_type == null or current_type.? != op.operation_type) {
                 // Finish current group
                 if (current_group) |group| {
                     var final_group = group;
-                    final_group.operations = try current_ops.toOwnedSlice();
-                    try groups.append(final_group);
+                    final_group.operations = try current_ops.toOwnedSlice(self.allocator);
+                    try groups.append(self.allocator, final_group);
                 }
-                
+
                 // Start new group
                 current_type = op.operation_type;
                 current_group = OperationGroup{
@@ -338,19 +338,19 @@ const VectorizedOperations = struct {
                     .start_index = i,
                     .operations = &[_]BatchOperation{},
                 };
-                current_ops = std.array_list.Managed(BatchOperation).init(self.allocator);
+                current_ops = std.ArrayList(BatchOperation){};
             }
-            
-            try current_ops.append(op);
+
+            try current_ops.append(self.allocator, op);
         }
-        
+
         // Finish last group
         if (current_group) |group| {
             var final_group = group;
-            final_group.operations = try current_ops.toOwnedSlice();
-            try groups.append(final_group);
+            final_group.operations = try current_ops.toOwnedSlice(self.allocator);
+            try groups.append(self.allocator, final_group);
         }
-        
+
         return VectorizedBatch{
             .groups = groups,
         };
@@ -407,7 +407,7 @@ pub const BatchResult = struct {
 
 /// Vectorized batch for processing
 const VectorizedBatch = struct {
-    groups: std.array_list.Managed(OperationGroup),
+    groups: std.ArrayList(OperationGroup),
     
     pub fn deinit(self: *VectorizedBatch, allocator: std.mem.Allocator) void {
         for (self.groups.items) |group| {

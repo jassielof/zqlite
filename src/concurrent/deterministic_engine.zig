@@ -10,7 +10,7 @@ pub const DeterministicEngine = struct {
     mvcc_manager: *mvcc.MVCCTransactionManager,
     deterministic_clock: DeterministicClock,
     hash_state: HashState,
-    execution_log: std.array_list.Managed(ExecutionRecord),
+    execution_log: std.ArrayList(ExecutionRecord),
     random_state: RandomState,
     
     const Self = @This();
@@ -21,7 +21,7 @@ pub const DeterministicEngine = struct {
             .mvcc_manager = mvcc_manager,
             .deterministic_clock = DeterministicClock.init(initial_seed),
             .hash_state = HashState.init(initial_seed),
-            .execution_log = std.array_list.Managed(ExecutionRecord).init(allocator),
+            .execution_log = .{},
             .random_state = RandomState.init(initial_seed),
         };
     }
@@ -40,7 +40,7 @@ pub const DeterministicEngine = struct {
             .deterministic_state = self.getDeterministicState(),
         };
         
-        try self.execution_log.append(record);
+        try self.execution_log.append(self.allocator, record);
         
         // Execute operation with deterministic context
         const result = try self.executeWithDeterministicContext(operation);
@@ -208,16 +208,16 @@ pub const DeterministicEngine = struct {
     
     /// Serialize row for deterministic storage
     fn serializeRow(self: *Self, row: storage.Row) ![]u8 {
-        var list = std.array_list.Managed(u8).init(self.allocator);
-        defer list.deinit();
-        
-        try list.writer().writeInt(u32, @intCast(row.values.len), .little);
-        
+        var list: std.ArrayList(u8) = .{};
+        defer list.deinit(self.allocator);
+
+        try list.writer(self.allocator).writeInt(u32, @intCast(row.values.len), .little);
+
         for (row.values) |value| {
-            try self.serializeValue(list.writer(), value);
+            try self.serializeValue(list.writer(self.allocator), value);
         }
-        
-        return try list.toOwnedSlice();
+
+        return try list.toOwnedSlice(self.allocator);
     }
     
     /// Deserialize row from deterministic storage
@@ -312,7 +312,7 @@ pub const DeterministicEngine = struct {
     }
     
     pub fn deinit(self: *Self) void {
-        self.execution_log.deinit();
+        self.execution_log.deinit(self.allocator);
     }
 };
 

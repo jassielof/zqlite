@@ -5,7 +5,7 @@ const std = @import("std");
 /// JSON value type that can be stored in the database
 pub const JsonValue = union(enum) {
     object: std.StringHashMap(JsonValue),
-    array: std.array_list.Managed(JsonValue),
+    array: std.ArrayList(JsonValue),
     string: []const u8,
     number: f64,
     boolean: bool,
@@ -26,9 +26,9 @@ pub const JsonValue = union(enum) {
 
     /// Convert to JSON string
     pub fn stringify(self: Self, allocator: std.mem.Allocator) ![]const u8 {
-        var buffer = std.array_list.Managed(u8).init(allocator);
-        try self.stringifyInto(buffer.writer());
-        return try buffer.toOwnedSlice();
+        var buffer: std.ArrayList(u8) = .{};
+        try self.stringifyInto(buffer.writer(allocator));
+        return try buffer.toOwnedSlice(allocator);
     }
 
     /// Convert to JSON string (write to writer)
@@ -173,9 +173,9 @@ pub const JsonValue = union(enum) {
                 return JsonValue{ .object = new_obj };
             },
             .array => |arr| {
-                var new_arr = std.array_list.Managed(JsonValue).init(allocator);
+                var new_arr: std.ArrayList(JsonValue) = .{};
                 for (arr.items) |item| {
-                    try new_arr.append(try item.clone(allocator));
+                    try new_arr.append(allocator, try item.clone(allocator));
                 }
                 return JsonValue{ .array = new_arr };
             },
@@ -232,9 +232,9 @@ pub const JsonValue = union(enum) {
                 return JsonValue{ .object = result };
             },
             .array => |arr| {
-                var result = std.array_list.Managed(JsonValue).init(allocator);
+                var result: std.ArrayList(JsonValue) = .{};
                 for (arr.items) |item| {
-                    try result.append(try jsonValueFromStd(allocator, item));
+                    try result.append(allocator, try jsonValueFromStd(allocator, item));
                 }
                 return JsonValue{ .array = result };
             },
@@ -320,12 +320,12 @@ pub const JsonFunctions = struct {
 
         switch (extracted) {
             .object => |obj| {
-                var keys = std.array_list.Managed(JsonValue).init(allocator);
-                defer keys.deinit();
+                var keys: std.ArrayList(JsonValue) = .{};
+                defer keys.deinit(allocator);
 
                 var iterator = obj.iterator();
                 while (iterator.next()) |entry| {
-                    try keys.append(JsonValue{ .string = try allocator.dupe(u8, entry.key_ptr.*) });
+                    try keys.append(allocator, JsonValue{ .string = try allocator.dupe(u8, entry.key_ptr.*) });
                 }
 
                 const keys_json = JsonValue{ .array = keys };

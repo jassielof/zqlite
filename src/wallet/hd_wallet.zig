@@ -118,14 +118,14 @@ pub const HDWallet = struct {
         
         // Convert entropy to mnemonic (simplified implementation)
         // In a real implementation, you'd use BIP39 wordlist
-        var mnemonic = std.array_list.Managed(u8).init(allocator);
-        defer mnemonic.deinit();
-        
+        var mnemonic: std.ArrayList(u8) = .{};
+        defer mnemonic.deinit(allocator);
+
         for (entropy) |byte| {
-            try mnemonic.writer().print("{x:02} ", .{byte});
+            try mnemonic.writer(allocator).print("{x:02} ", .{byte});
         }
-        
-        return mnemonic.toOwnedSlice();
+
+        return mnemonic.toOwnedSlice(allocator);
     }
     
     pub fn seedFromMnemonic(mnemonic: []const u8, passphrase: []const u8) ![64]u8 {
@@ -206,15 +206,15 @@ pub const WalletManager = struct {
     }
     
     pub fn listWallets(self: *Self) []const HDWallet.Wallet {
-        var wallets = std.array_list.Managed(HDWallet.Wallet).init(self.allocator);
-        defer wallets.deinit();
-        
+        var wallets: std.ArrayList(HDWallet.Wallet) = .{};
+        defer wallets.deinit(self.allocator);
+
         var iterator = self.wallets.iterator();
         while (iterator.next()) |entry| {
-            wallets.append(entry.value_ptr.*) catch continue;
+            wallets.append(self.allocator, entry.value_ptr.*) catch continue;
         }
-        
-        return wallets.toOwnedSlice() catch &[_]HDWallet.Wallet{};
+
+        return wallets.toOwnedSlice(self.allocator) catch &[_]HDWallet.Wallet{};
     }
     
     pub fn removeWallet(self: *Self, wallet_id: []const u8) bool {

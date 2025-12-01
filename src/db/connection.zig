@@ -167,7 +167,7 @@ pub const Connection = struct {
         var result_set = ResultSet{
             .allocator = self.allocator,
             .connection = self,
-            .rows = std.array_list.Managed(storage.Row).init(self.allocator),
+            .rows = .{},
             .current_index = 0,
             .column_names = try self.extractColumnNames(&parsed.statement),
         };
@@ -175,7 +175,7 @@ pub const Connection = struct {
         // Transfer ownership of rows to ResultSet
         result_set.rows = result.rows;
         // Prevent result.deinit from freeing the rows (we've transferred ownership)
-        result.rows = std.array_list.Managed(storage.Row).init(self.allocator);
+        result.rows = .{};
 
         return result_set;
     }
@@ -307,7 +307,7 @@ pub const ConnectionInfo = struct {
 pub const ResultSet = struct {
     allocator: std.mem.Allocator,
     connection: *Connection,
-    rows: std.array_list.Managed(storage.Row),
+    rows: std.ArrayList(storage.Row),
     current_index: usize,
     column_names: [][]const u8,
 
@@ -404,7 +404,7 @@ pub const ResultSet = struct {
             }
             self.allocator.free(row.values);
         }
-        self.rows.deinit();
+        self.rows.deinit(self.allocator);
     }
 };
 

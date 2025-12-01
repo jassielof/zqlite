@@ -126,8 +126,9 @@ pub const Logger = struct {
     }
 
     fn getTimestamp() []const u8 {
-        // Get current timestamp in ISO 8601 format
-        const timestamp_ms = std.time.milliTimestamp();
+        // Get current timestamp in ISO 8601 format using POSIX clock
+        const ts = std.posix.clock_gettime(.REALTIME) catch return "UNKNOWN";
+        const timestamp_ms: i64 = @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
         const seconds = @divFloor(timestamp_ms, 1000);
         const milliseconds = @mod(timestamp_ms, 1000);
 

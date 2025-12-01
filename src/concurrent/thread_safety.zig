@@ -4,8 +4,8 @@ const zqlite = @import("../zqlite.zig");
 /// Thread-safe connection pool for concurrent database access
 pub const ConnectionPool = struct {
     allocator: std.mem.Allocator,
-    connections: std.array_list.Managed(*zqlite.db.Connection),
-    available: std.array_list.Managed(bool),
+    connections: std.ArrayList(*zqlite.db.Connection),
+    available: std.ArrayList(bool),
     mutex: std.Thread.Mutex,
     condition: std.Thread.Condition,
     database_path: []const u8,
@@ -19,8 +19,8 @@ pub const ConnectionPool = struct {
         var pool = try allocator.create(Self);
         pool.* = Self{
             .allocator = allocator,
-            .connections = std.array_list.Managed(*zqlite.db.Connection).init(allocator),
-            .available = std.array_list.Managed(bool).init(allocator),
+            .connections = .{},
+            .available = .{},
             .mutex = std.Thread.Mutex{},
             .condition = std.Thread.Condition{},
             .database_path = try allocator.dupe(u8, database_path),
@@ -29,8 +29,8 @@ pub const ConnectionPool = struct {
         };
 
         // Pre-allocate connections
-        try pool.connections.ensureTotalCapacity(max_connections);
-        try pool.available.ensureTotalCapacity(max_connections);
+        try pool.connections.ensureTotalCapacity(allocator, max_connections);
+        try pool.available.ensureTotalCapacity(allocator, max_connections);
 
         for (0..max_connections) |_| {
             const conn = if (pool.is_memory)
@@ -38,8 +38,8 @@ pub const ConnectionPool = struct {
             else
                 try zqlite.open(database_path);
 
-            try pool.connections.append(conn);
-            try pool.available.append(true);
+            try pool.connections.append(allocator, conn);
+            try pool.available.append(allocator, true);
         }
 
         return pool;
@@ -129,8 +129,8 @@ pub const ConnectionPool = struct {
             conn.close();
         }
 
-        self.connections.deinit();
-        self.available.deinit();
+        self.connections.deinit(self.allocator);
+        self.available.deinit(self.allocator);
         self.allocator.free(self.database_path);
         self.allocator.destroy(self);
     }

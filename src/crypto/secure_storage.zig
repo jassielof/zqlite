@@ -324,7 +324,7 @@ pub const BackendInfo = struct {
 /// Simple transaction log for crypto operations
 pub const CryptoTransactionLog = struct {
     allocator: std.mem.Allocator,
-    transactions: std.array_list.Managed(TransactionEntry),
+    transactions: std.ArrayList(TransactionEntry),
 
     const TransactionEntry = struct {
         timestamp: i64,
@@ -337,7 +337,7 @@ pub const CryptoTransactionLog = struct {
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .allocator = allocator,
-            .transactions = std.array_list.Managed(TransactionEntry).init(allocator),
+            .transactions = .{},
         };
     }
 
@@ -345,7 +345,7 @@ pub const CryptoTransactionLog = struct {
         for (self.transactions.items) |entry| {
             self.allocator.free(entry.operation);
         }
-        self.transactions.deinit();
+        self.transactions.deinit(self.allocator);
     }
 
     pub fn addTransaction(self: *Self, operation: []const u8, data_hash: [32]u8) !void {
@@ -355,7 +355,7 @@ pub const CryptoTransactionLog = struct {
             .operation = try self.allocator.dupe(u8, operation),
             .hash = data_hash,
         };
-        try self.transactions.append(entry);
+        try self.transactions.append(self.allocator, entry);
     }
 
     pub fn getTransactionCount(self: Self) usize {

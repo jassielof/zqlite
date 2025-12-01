@@ -276,15 +276,15 @@ pub const KeyManager = struct {
     }
     
     pub fn listWallets(self: *Self) ![][]const u8 {
-        var wallet_ids = std.array_list.Managed([]const u8).init(self.allocator);
-        defer wallet_ids.deinit();
-        
+        var wallet_ids: std.ArrayList([]const u8) = .{};
+        defer wallet_ids.deinit(self.allocator);
+
         var iterator = self.master_keys.iterator();
         while (iterator.next()) |entry| {
-            try wallet_ids.append(entry.key_ptr.*);
+            try wallet_ids.append(self.allocator, entry.key_ptr.*);
         }
-        
-        return wallet_ids.toOwnedSlice();
+
+        return wallet_ids.toOwnedSlice(self.allocator);
     }
     
     pub fn deleteWallet(self: *Self, wallet_id: []const u8) bool {
@@ -348,15 +348,15 @@ pub const KeyStorage = struct {
     }
     
     pub fn listKeys(self: *Self) ![]StoredKey {
-        var keys = std.array_list.Managed(StoredKey).init(self.allocator);
-        defer keys.deinit();
-        
+        var keys: std.ArrayList(StoredKey) = .{};
+        defer keys.deinit(self.allocator);
+
         var iterator = self.keys.iterator();
         while (iterator.next()) |entry| {
-            try keys.append(entry.value_ptr.*);
+            try keys.append(self.allocator, entry.value_ptr.*);
         }
-        
-        return keys.toOwnedSlice();
+
+        return keys.toOwnedSlice(self.allocator);
     }
     
     pub fn deleteKey(self: *Self, key_id: []const u8) bool {

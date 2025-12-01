@@ -519,15 +519,15 @@ pub const SecureValue = union(enum) {
 
     pub fn encrypt(value: storage.Value, crypto: *CryptoEngine) !SecureValue {
         // Convert storage value to bytes for encryption
-        var buffer = std.array_list.Managed(u8).init(crypto.allocator);
-        defer buffer.deinit();
+        var buffer: std.ArrayList(u8) = .{};
+        defer buffer.deinit(crypto.allocator);
 
         switch (value) {
-            .Integer => |int| try buffer.appendSlice(std.mem.asBytes(&int)),
-            .Real => |real| try buffer.appendSlice(std.mem.asBytes(&real)),
-            .Text => |text| try buffer.appendSlice(text),
-            .Blob => |blob| try buffer.appendSlice(blob),
-            .Null => try buffer.appendSlice("NULL"),
+            .Integer => |int| try buffer.appendSlice(crypto.allocator, std.mem.asBytes(&int)),
+            .Real => |real| try buffer.appendSlice(crypto.allocator, std.mem.asBytes(&real)),
+            .Text => |text| try buffer.appendSlice(crypto.allocator, text),
+            .Blob => |blob| try buffer.appendSlice(crypto.allocator, blob),
+            .Null => try buffer.appendSlice(crypto.allocator, "NULL"),
         }
 
         const encrypted = try crypto.encryptField(buffer.items);
@@ -622,7 +622,7 @@ pub const SecureTable = struct {
 pub const CryptoTransactionLog = struct {
     allocator: std.mem.Allocator,
     crypto_engine: *CryptoEngine,
-    entries: std.array_list.Managed(LogEntry),
+    entries: std.ArrayList(LogEntry),
     chain_key: [32]u8,
 
     const LogEntry = struct {
@@ -644,7 +644,7 @@ pub const CryptoTransactionLog = struct {
         return Self{
             .allocator = allocator,
             .crypto_engine = crypto_engine,
-            .entries = std.array_list.Managed(LogEntry).init(allocator),
+            .entries = .{},
             .chain_key = chain_key,
         };
     }
@@ -662,13 +662,13 @@ pub const CryptoTransactionLog = struct {
             std.mem.zeroes([32]u8);
 
         // Create signing data
-        var signing_data = std.array_list.Managed(u8).init(self.allocator);
-        defer signing_data.deinit();
-        try signing_data.appendSlice(std.mem.asBytes(&transaction_id));
-        try signing_data.appendSlice(table_name);
-        try signing_data.appendSlice(operation);
-        try signing_data.appendSlice(&data_hash);
-        try signing_data.appendSlice(&prev_hash);
+        var signing_data: std.ArrayList(u8) = .{};
+        defer signing_data.deinit(self.allocator);
+        try signing_data.appendSlice(self.allocator, std.mem.asBytes(&transaction_id));
+        try signing_data.appendSlice(self.allocator, table_name);
+        try signing_data.appendSlice(self.allocator, operation);
+        try signing_data.appendSlice(self.allocator, &data_hash);
+        try signing_data.appendSlice(self.allocator, &prev_hash);
 
         // Create hybrid signature (classical + post-quantum)
         const signature = try self.crypto_engine.signTransaction(signing_data.items);
@@ -684,20 +684,20 @@ pub const CryptoTransactionLog = struct {
             .prev_hash = prev_hash,
         };
 
-        try self.entries.append(entry);
+        try self.entries.append(self.allocator, entry);
     }
 
     /// Verify the post-quantum integrity of the entire transaction log
     pub fn verifyIntegrity(self: *Self) !bool {
         for (self.entries.items, 0..) |entry, i| {
             // Reconstruct signing data
-            var signing_data = std.array_list.Managed(u8).init(self.allocator);
-            defer signing_data.deinit();
-            try signing_data.appendSlice(std.mem.asBytes(&entry.transaction_id));
-            try signing_data.appendSlice(entry.table_name);
-            try signing_data.appendSlice(entry.operation);
-            try signing_data.appendSlice(&entry.data_hash);
-            try signing_data.appendSlice(&entry.prev_hash);
+            var signing_data: std.ArrayList(u8) = .{};
+            defer signing_data.deinit(self.allocator);
+            try signing_data.appendSlice(self.allocator, std.mem.asBytes(&entry.transaction_id));
+            try signing_data.appendSlice(self.allocator, entry.table_name);
+            try signing_data.appendSlice(self.allocator, entry.operation);
+            try signing_data.appendSlice(self.allocator, &entry.data_hash);
+            try signing_data.appendSlice(self.allocator, &entry.prev_hash);
 
             // Verify hybrid signature
             if (!try self.crypto_engine.verifyTransaction(signing_data.items, entry.signature)) {

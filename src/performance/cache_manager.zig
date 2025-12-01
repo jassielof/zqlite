@@ -3,6 +3,12 @@ const storage = @import("../db/storage.zig");
 const planner = @import("../executor/planner.zig");
 const ast = @import("../parser/ast.zig");
 
+/// Get current time in milliseconds using POSIX clock
+fn getMilliTimestamp() i64 {
+    const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 /// High-performance cache manager for zqlite v1.2.5
 /// Provides B-tree node caching and query plan caching
 pub const CacheManager = struct {
@@ -60,7 +66,7 @@ pub const BTreeCache = struct {
     pub fn get(self: *Self, page_id: u32) ?[]const u8 {
         if (self.cache.getPtr(page_id)) |cached_node| {
             // Update access statistics
-            cached_node.last_accessed = std.time.milliTimestamp();
+            cached_node.last_accessed = getMilliTimestamp();
             cached_node.access_count += 1;
             
             // Move to front of LRU list
@@ -81,7 +87,7 @@ pub const BTreeCache = struct {
             self.allocator.free(cached_node.data);
             cached_node.data = try self.allocator.dupe(u8, data);
             cached_node.is_dirty = is_dirty;
-            cached_node.last_accessed = std.time.milliTimestamp();
+            cached_node.last_accessed = getMilliTimestamp();
             cached_node.access_count += 1;
             
             self.moveToFront(page_id);
@@ -98,7 +104,7 @@ pub const BTreeCache = struct {
             .page_id = page_id,
             .data = try self.allocator.dupe(u8, data),
             .is_dirty = is_dirty,
-            .last_accessed = std.time.milliTimestamp(),
+            .last_accessed = getMilliTimestamp(),
             .access_count = 1,
         };
         
@@ -247,7 +253,7 @@ pub const QueryPlanCache = struct {
         const hash = self.hashSQL(sql);
         
         if (self.cache.getPtr(hash)) |cached_plan| {
-            cached_plan.last_used = std.time.milliTimestamp();
+            cached_plan.last_used = getMilliTimestamp();
             cached_plan.use_count += 1;
             return &cached_plan.plan;
         }
@@ -258,7 +264,7 @@ pub const QueryPlanCache = struct {
     /// Put plan in cache
     pub fn put(self: *Self, sql: []const u8, plan: planner.ExecutionPlan) !void {
         const hash = self.hashSQL(sql);
-        const current_time = std.time.milliTimestamp();
+        const current_time = getMilliTimestamp();
         
         // Evict if at capacity
         while (self.cache.count() >= self.max_size) {
@@ -318,7 +324,7 @@ pub const QueryPlanCache = struct {
     
     /// Clear expired plans (older than specified age in milliseconds)
     pub fn clearExpired(self: *Self, max_age_ms: i64) !void {
-        const current_time = std.time.milliTimestamp();
+        const current_time = getMilliTimestamp();
         var expired_hashes = std.ArrayList(u64).init(self.allocator);
         defer expired_hashes.deinit();
         
@@ -350,7 +356,7 @@ pub const QueryPlanCache = struct {
     
     fn evictOldest(self: *Self) !void {
         var oldest_hash: ?u64 = null;
-        var oldest_time: i64 = std.time.milliTimestamp();
+        var oldest_time: i64 = getMilliTimestamp();
         
         var iterator = self.cache.iterator();
         while (iterator.next()) |entry| {

@@ -106,7 +106,7 @@ pub const HashVerifier = struct {
         
         var result = VerificationResult{
             .all_verified = true,
-            .failed_deps = std.array_list.Managed([]const u8).init(self.allocator),
+            .failed_deps = .{},
         };
         
         // Simple parsing to find .hash = lines
@@ -132,24 +132,24 @@ pub const HashVerifier = struct {
                 if (current_dep) |dep_name| {
                     if (!self.verifyDependencyHash(dep_name, hash_value)) {
                         result.all_verified = false;
-                        try result.failed_deps.append(try self.allocator.dupe(u8, dep_name));
+                        try result.failed_deps.append(self.allocator, try self.allocator.dupe(u8, dep_name));
                     }
                 }
             }
         }
-        
+
         return result;
     }
-    
+
     pub const VerificationResult = struct {
         all_verified: bool,
-        failed_deps: std.array_list.Managed([]const u8),
-        
+        failed_deps: std.ArrayList([]const u8),
+
         pub fn deinit(self: *VerificationResult, allocator: std.mem.Allocator) void {
             for (self.failed_deps.items) |dep| {
                 allocator.free(dep);
             }
-            self.failed_deps.deinit();
+            self.failed_deps.deinit(allocator);
         }
     };
 };
@@ -247,25 +247,25 @@ pub const StabilityMonitor = struct {
     
     /// Generate stability report
     pub fn generateReport(self: Self) ![]u8 {
-        var report = std.array_list.Managed(u8).init(self.allocator);
-        const writer = report.writer();
-        
+        var report: std.ArrayList(u8) = .{};
+        const writer = report.writer(self.allocator);
+
         try writer.writeAll("=== ZQLite v0.8.0 Stability Report ===\n");
         try writer.print("System Stable: {}\n", .{self.isStable()});
         try writer.writeAll("\nOperation Statistics:\n");
-        
+
         var op_iterator = self.operation_counts.iterator();
         while (op_iterator.next()) |entry| {
             const op_name = entry.key_ptr.*;
             const op_count = entry.value_ptr.*;
             const err_count = self.error_counts.get(op_name) orelse 0;
             const error_rate = self.getErrorRate(op_name);
-            
+
             try writer.print("  {s}: {} ops, {} errors, {d:.2}% error rate\n", .{
                 op_name, op_count, err_count, error_rate * 100.0
             });
         }
-        
-        return report.toOwnedSlice();
+
+        return report.toOwnedSlice(self.allocator);
     }
 };

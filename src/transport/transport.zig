@@ -1,16 +1,15 @@
 const std = @import("std");
-const tokioz = @import("tokioz");
 
 // Export post-quantum QUIC transport
 pub const PQQuicTransport = @import("pq_quic.zig").PQQuicTransport;
 pub const PQDatabaseTransport = @import("pq_quic.zig").PQDatabaseTransport;
 
-/// 🌐 ZQLite Transport Layer
+/// ZQLite Transport Layer
 /// High-performance networking with optional post-quantum features
 pub const Transport = struct {
     allocator: std.mem.Allocator,
     endpoint: ?Endpoint,
-    connections: std.array_list.Managed(*Connection),
+    connections: std.ArrayList(*Connection),
     is_server: bool,
     crypto_enabled: bool,
 
@@ -18,40 +17,46 @@ pub const Transport = struct {
     const ConnectionId = u64;
 
     const Endpoint = struct {
-        address: std.net.Address,
-        socket: std.net.Stream,
+        address: std.Io.net.IpAddress,
+        handle: ?std.Io.net.Socket.Handle,
     };
 
     const Connection = struct {
         id: ConnectionId,
-        endpoint: std.net.Address,
+        address: std.Io.net.IpAddress,
         state: ConnectionState,
-        write_buffer: std.array_list.Managed(u8),
-        read_buffer: std.array_list.Managed(u8),
+        write_buffer: std.ArrayList(u8),
+        read_buffer: std.ArrayList(u8),
+        allocator: std.mem.Allocator,
 
         const ConnectionState = enum {
-            Connecting,
-            Connected,
-            Closing,
-            Closed,
+            connecting,
+            connected,
+            closing,
+            closed,
         };
 
-        pub fn init(allocator: std.mem.Allocator, id: ConnectionId, endpoint: std.net.Address) !*Connection {
+        pub fn init(allocator: std.mem.Allocator, id: ConnectionId, address: std.Io.net.IpAddress) !*Connection {
             const conn = try allocator.create(Connection);
             conn.* = Connection{
                 .id = id,
-                .endpoint = endpoint,
-                .state = .Connecting,
-                .write_buffer = std.array_list.Managed(u8).init(allocator),
-                .read_buffer = std.array_list.Managed(u8).init(allocator),
+                .address = address,
+                .state = .connecting,
+                .write_buffer = .{},
+                .read_buffer = .{},
+                .allocator = allocator,
             };
             return conn;
         }
 
-        pub fn deinit(self: *Connection, allocator: std.mem.Allocator) void {
-            self.write_buffer.deinit();
-            self.read_buffer.deinit();
-            allocator.destroy(self);
+        pub fn deinit(self: *Connection) void {
+            self.write_buffer.deinit(self.allocator);
+            self.read_buffer.deinit(self.allocator);
+            self.allocator.destroy(self);
+        }
+
+        pub fn appendWriteData(self: *Connection, data: []const u8) !void {
+            try self.write_buffer.appendSlice(self.allocator, data);
         }
     };
 
@@ -59,34 +64,33 @@ pub const Transport = struct {
         return Self{
             .allocator = allocator,
             .endpoint = null,
-            .connections = std.array_list.Managed(*Connection).init(allocator),
+            .connections = .{},
             .is_server = is_server,
             .crypto_enabled = false,
         };
     }
 
-    pub fn bind(self: *Self, address: std.net.Address) !void {
-        const socket = try std.net.tcpConnectToAddress(address);
+    pub fn bind(self: *Self, address: std.Io.net.IpAddress) !void {
         self.endpoint = Endpoint{
             .address = address,
-            .socket = socket,
+            .handle = null,
         };
     }
 
-    pub fn connect(self: *Self, server_address: std.net.Address) !ConnectionId {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const timestamp = ts.sec;
-        const conn_id = @as(ConnectionId, @intCast(timestamp));
+    pub fn connect(self: *Self, server_address: std.Io.net.IpAddress) !ConnectionId {
+        // Use POSIX clock for timestamp-based connection ID
+        const ts = std.posix.clock_gettime(.REALTIME) catch return error.TimeUnavailable;
+        const conn_id: ConnectionId = @intCast(ts.sec);
         const connection = try Connection.init(self.allocator, conn_id, server_address);
-        connection.state = .Connected;
-        try self.connections.append(connection);
+        connection.state = .connected;
+        try self.connections.append(self.allocator, connection);
         return conn_id;
     }
 
     pub fn sendData(self: *Self, conn_id: ConnectionId, data: []const u8) !void {
         for (self.connections.items) |conn| {
             if (conn.id == conn_id) {
-                try conn.write_buffer.appendSlice(data);
+                try conn.appendWriteData(data);
                 return;
             }
         }
@@ -107,8 +111,8 @@ pub const Transport = struct {
     pub fn closeConnection(self: *Self, conn_id: ConnectionId) !void {
         for (self.connections.items, 0..) |conn, i| {
             if (conn.id == conn_id) {
-                conn.state = .Closed;
-                conn.deinit(self.allocator);
+                conn.state = .closed;
+                conn.deinit();
                 _ = self.connections.orderedRemove(i);
                 return;
             }
@@ -125,13 +129,10 @@ pub const Transport = struct {
 
     pub fn deinit(self: *Self) void {
         for (self.connections.items) |conn| {
-            conn.deinit(self.allocator);
+            conn.deinit();
         }
-        self.connections.deinit();
-
-        if (self.endpoint) |endpoint| {
-            endpoint.socket.close();
-        }
+        self.connections.deinit(self.allocator);
+        self.endpoint = null;
     }
 };
 
@@ -141,7 +142,6 @@ pub const TransportStats = struct {
     total_bytes_received: u64,
 };
 
-// Test for transport functionality
 test "transport basic functionality" {
     const testing = std.testing;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -151,7 +151,8 @@ test "transport basic functionality" {
     var transport = Transport.init(allocator, false);
     defer transport.deinit();
 
-    const server_addr = std.net.Address.parseIp("127.0.0.1", 8080) catch unreachable;
+    // Parse IP address using Zig 0.16 API
+    const server_addr = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
     const conn_id = try transport.connect(server_addr);
 
     try testing.expect(conn_id != 0);

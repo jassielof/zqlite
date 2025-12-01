@@ -6,7 +6,7 @@ pub const WriteAheadLog = struct {
     file: std.fs.File,
     is_transaction_active: bool,
     transaction_id: u64,
-    log_entries: std.array_list.Managed(LogEntry),
+    log_entries: std.ArrayList(LogEntry),
 
     const Self = @This();
 
@@ -16,7 +16,7 @@ pub const WriteAheadLog = struct {
         wal.allocator = allocator;
         wal.is_transaction_active = false;
         wal.transaction_id = 0;
-        wal.log_entries = std.array_list.Managed(LogEntry).init(allocator);
+        wal.log_entries = .{};
 
         // Create WAL file path
         const wal_path = try std.fmt.allocPrint(allocator, "{s}.wal", .{db_path});
@@ -58,7 +58,7 @@ pub const WriteAheadLog = struct {
             .new_data = &.{},
         };
 
-        try self.log_entries.append(begin_entry);
+        try self.log_entries.append(self.allocator, begin_entry);
         try self.writeLogEntry(begin_entry);
     }
 
@@ -77,7 +77,7 @@ pub const WriteAheadLog = struct {
             .new_data = try self.allocator.dupe(u8, new_data),
         };
 
-        try self.log_entries.append(entry);
+        try self.log_entries.append(self.allocator, entry);
         try self.writeLogEntry(entry);
     }
 
@@ -189,8 +189,8 @@ pub const WriteAheadLog = struct {
         var buffer: [8192]u8 = undefined;
         var position: u64 = 0;
         var max_transaction_id: u64 = 0;
-        var incomplete_transactions = std.array_list.Managed(u64).init(self.allocator);
-        defer incomplete_transactions.deinit();
+        var incomplete_transactions: std.ArrayList(u64) = .{};
+        defer incomplete_transactions.deinit(self.allocator);
 
         // First pass: find incomplete transactions
         while (position < file_size) {
@@ -211,7 +211,7 @@ pub const WriteAheadLog = struct {
 
                 switch (entry.entry_type) {
                     .Begin => {
-                        try incomplete_transactions.append(entry.transaction_id);
+                        try incomplete_transactions.append(self.allocator, entry.transaction_id);
                     },
                     .Commit, .Rollback => {
                         // Remove from incomplete list
@@ -270,7 +270,7 @@ pub const WriteAheadLog = struct {
     /// Clean up WAL
     pub fn deinit(self: *Self) void {
         self.clearLogEntries();
-        self.log_entries.deinit();
+        self.log_entries.deinit(self.allocator);
         self.file.close();
         self.allocator.destroy(self);
     }

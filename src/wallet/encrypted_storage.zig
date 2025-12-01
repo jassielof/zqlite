@@ -192,13 +192,13 @@ pub const WalletStorage = struct {
     }
     
     pub fn listWallets(self: *Self) ![]WalletInfo {
-        var wallet_infos = std.array_list.Managed(WalletInfo).init(self.allocator);
-        defer wallet_infos.deinit();
-        
+        var wallet_infos: std.ArrayList(WalletInfo) = .{};
+        defer wallet_infos.deinit(self.allocator);
+
         var iterator = self.wallets.iterator();
         while (iterator.next()) |entry| {
             const wallet = entry.value_ptr;
-            try wallet_infos.append(WalletInfo{
+            try wallet_infos.append(self.allocator, WalletInfo{
                 .id = wallet.id,
                 .name = wallet.name,
                 .coin_type = wallet.coin_type,
@@ -206,8 +206,8 @@ pub const WalletStorage = struct {
                 .last_access = wallet.last_access,
             });
         }
-        
-        return wallet_infos.toOwnedSlice();
+
+        return wallet_infos.toOwnedSlice(self.allocator);
     }
     
     pub fn changePassword(self: *Self, wallet_id: []const u8, old_password: []const u8, new_password: []const u8) !void {

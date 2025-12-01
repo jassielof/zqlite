@@ -12,7 +12,7 @@ pub const MVCCTransactionManager = struct {
     global_lock: std.Thread.RwLock,
     storage_engine: *storage.StorageEngine,
     crypto_engine: ?*crypto.CryptoEngine,
-    commit_log: std.array_list.Managed(CommitLogEntry),
+    commit_log: std.ArrayList(CommitLogEntry),
     deadlock_detector: DeadlockDetector,
 
     const Self = @This();
@@ -25,7 +25,7 @@ pub const MVCCTransactionManager = struct {
             .global_lock = std.Thread.RwLock{},
             .storage_engine = storage_engine,
             .crypto_engine = crypto_engine,
-            .commit_log = std.array_list.Managed(CommitLogEntry).init(allocator),
+            .commit_log = .{},
             .deadlock_detector = DeadlockDetector.init(allocator),
         };
     }
@@ -45,7 +45,7 @@ pub const MVCCTransactionManager = struct {
             .state = .Active,
             .read_set = std.HashMap(RowKey, RowVersion).init(self.allocator),
             .write_set = std.HashMap(RowKey, RowValue).init(self.allocator),
-            .locks = std.array_list.Managed(LockInfo).init(self.allocator),
+            .locks = .{},
             .allocator = self.allocator,
             .created_at = ts.sec,
         };
@@ -105,7 +105,7 @@ pub const MVCCTransactionManager = struct {
             return error.DeadlockDetected;
         }
 
-        try transaction.locks.append(lock_info);
+        try transaction.locks.append(self.allocator, lock_info);
 
         // Add to write set
         const row_key = RowKey{ .table = table, .row_id = row_id };
@@ -181,7 +181,7 @@ pub const MVCCTransactionManager = struct {
             .timestamp = ts.sec,
             .write_count = transaction.write_set.count(),
         };
-        try self.commit_log.append(commit_entry);
+        try self.commit_log.append(self.allocator, commit_entry);
 
         // Release locks
         try self.releaseLocks(transaction);
@@ -308,7 +308,7 @@ pub const MVCCTransactionManager = struct {
         for (transaction.locks.items) |lock_info| {
             self.allocator.free(lock_info.table);
         }
-        transaction.locks.clearAndFree();
+        transaction.locks.clearAndFree(self.allocator);
     }
 
     /// Generate a unique transaction ID
@@ -348,7 +348,7 @@ pub const MVCCTransactionManager = struct {
             self.allocator.destroy(transaction.*);
         }
         self.transactions.deinit();
-        self.commit_log.deinit();
+        self.commit_log.deinit(self.allocator);
         self.deadlock_detector.deinit();
     }
 };
@@ -414,7 +414,7 @@ pub const Transaction = struct {
     state: TransactionState,
     read_set: std.HashMap(RowKey, RowVersion),
     write_set: std.HashMap(RowKey, RowValue),
-    locks: std.array_list.Managed(LockInfo),
+    locks: std.ArrayList(LockInfo),
     allocator: std.mem.Allocator,
     created_at: i64,
 
@@ -424,7 +424,7 @@ pub const Transaction = struct {
         for (self.locks.items) |lock_info| {
             self.allocator.free(lock_info.table);
         }
-        self.locks.deinit();
+        self.locks.deinit(self.allocator);
     }
 };
 
@@ -448,26 +448,27 @@ pub const TransactionStats = struct {
 /// Deadlock detection using wait-for graph
 pub const DeadlockDetector = struct {
     allocator: std.mem.Allocator,
-    wait_for_graph: std.HashMap(TransactionId, std.ArrayList(TransactionId)),
+    wait_for_graph: std.AutoHashMap(TransactionId, std.ArrayList(TransactionId)),
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .allocator = allocator,
-            .wait_for_graph = std.HashMap(TransactionId, std.ArrayList(TransactionId)).init(allocator),
+            .wait_for_graph = std.AutoHashMap(TransactionId, std.ArrayList(TransactionId)).init(allocator),
         };
     }
 
     pub fn addTransaction(self: *Self, transaction_id: TransactionId) !void {
         if (!self.wait_for_graph.contains(transaction_id)) {
-            try self.wait_for_graph.put(transaction_id, std.array_list.Managed(TransactionId).init(self.allocator));
+            try self.wait_for_graph.put(transaction_id, std.ArrayList(TransactionId){});
         }
     }
 
     pub fn removeTransaction(self: *Self, transaction_id: TransactionId) !void {
         if (self.wait_for_graph.fetchRemove(transaction_id)) |entry| {
-            entry.value.deinit();
+            var list = entry.value;
+            list.deinit(self.allocator);
         }
 
         // Remove from other transaction's wait lists
@@ -494,7 +495,8 @@ pub const DeadlockDetector = struct {
     pub fn deinit(self: *Self) void {
         var iterator = self.wait_for_graph.valueIterator();
         while (iterator.next()) |wait_list| {
-            wait_list.deinit();
+            var list = wait_list.*;
+            list.deinit(self.allocator);
         }
         self.wait_for_graph.deinit();
     }

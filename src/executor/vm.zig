@@ -28,7 +28,7 @@ pub const VirtualMachine = struct {
     /// Execute a query plan
     pub fn execute(self: *Self, plan: *planner.ExecutionPlan) !ExecutionResult {
         var result = ExecutionResult{
-            .rows = std.array_list.Managed(storage.Row).init(self.connection.allocator),
+            .rows = .{},
             .affected_rows = 0,
             .connection = self.connection,
         };
@@ -97,22 +97,22 @@ pub const VirtualMachine = struct {
                     else => {},
                 }
             }
-            try result.rows.append(row);
+            try result.rows.append(self.connection.allocator, row);
             // Row appended to result
         }
     }
 
     /// Execute filter (WHERE clause)
     fn executeFilter(self: *Self, filter: *planner.FilterStep, result: *ExecutionResult) !void {
-        var filtered_rows = std.array_list.Managed(storage.Row).init(self.connection.allocator);
+        var filtered_rows: std.ArrayList(storage.Row) = .{};
 
         for (result.rows.items) |row| {
             if (try self.evaluateCondition(&filter.condition, &row)) {
-                try filtered_rows.append(row);
+                try filtered_rows.append(self.connection.allocator, row);
             }
         }
 
-        result.rows.deinit();
+        result.rows.deinit(self.connection.allocator);
         result.rows = filtered_rows;
     }
 
@@ -124,10 +124,10 @@ pub const VirtualMachine = struct {
         }
 
         // Create projected rows with only selected columns
-        var projected_rows = std.array_list.Managed(storage.Row).init(self.connection.allocator);
+        var projected_rows: std.ArrayList(storage.Row) = .{};
 
         for (result.rows.items) |original_row| {
-            var projected_values = std.array_list.Managed(storage.Value).init(self.connection.allocator);
+            var projected_values: std.ArrayList(storage.Value) = .{};
 
             // For now, we'll assume column order matches project.columns order
             // In a real implementation, we'd need column metadata from the table schema
@@ -135,16 +135,16 @@ pub const VirtualMachine = struct {
                 if (i < original_row.values.len) {
                     // Transfer ownership of the value instead of cloning
                     // Transferring value ownership
-                    try projected_values.append(original_row.values[i]);
+                    try projected_values.append(self.connection.allocator, original_row.values[i]);
                 } else {
                     // Column doesn't exist, add NULL
-                    try projected_values.append(storage.Value.Null);
+                    try projected_values.append(self.connection.allocator, storage.Value.Null);
                 }
                 _ = col_name; // Suppress unused warning for now
             }
 
-            try projected_rows.append(storage.Row{
-                .values = try projected_values.toOwnedSlice(),
+            try projected_rows.append(self.connection.allocator, storage.Row{
+                .values = try projected_values.toOwnedSlice(self.connection.allocator),
             });
         }
 
@@ -154,7 +154,7 @@ pub const VirtualMachine = struct {
             // Cleaning up original row array
             self.connection.allocator.free(row.values);
         }
-        result.rows.deinit();
+        result.rows.deinit(self.connection.allocator);
         result.rows = projected_rows;
     }
 
@@ -421,11 +421,11 @@ pub const VirtualMachine = struct {
 
         if (start > 0 or end < result.rows.items.len) {
             // Create new slice with limited rows
-            var limited_rows = std.array_list.Managed(storage.Row).init(self.connection.allocator);
+            var limited_rows: std.ArrayList(storage.Row) = .{};
             for (result.rows.items[start..end]) |row| {
-                try limited_rows.append(row);
+                try limited_rows.append(self.connection.allocator, row);
             }
-            result.rows.deinit();
+            result.rows.deinit(self.connection.allocator);
             result.rows = limited_rows;
         }
     }
@@ -580,7 +580,7 @@ pub const VirtualMachine = struct {
         }
 
         var updated_count: u32 = 0;
-        var updated_rows = std.array_list.Managed(storage.Row).init(self.connection.allocator);
+        var updated_rows: std.ArrayList(storage.Row) = .{};
         defer {
             for (updated_rows.items) |row| {
                 for (row.values) |value| {
@@ -588,7 +588,7 @@ pub const VirtualMachine = struct {
                 }
                 self.connection.allocator.free(row.values);
             }
-            updated_rows.deinit();
+            updated_rows.deinit(self.connection.allocator);
         }
 
         for (all_rows) |row| {
@@ -625,7 +625,7 @@ pub const VirtualMachine = struct {
                     _ = assignment.column; // Suppress unused warning for now
                 }
 
-                try updated_rows.append(storage.Row{ .values = updated_values });
+                try updated_rows.append(self.connection.allocator, storage.Row{ .values = updated_values });
                 updated_count += 1;
             } else {
                 // Keep the original row unchanged
@@ -642,7 +642,7 @@ pub const VirtualMachine = struct {
                     cloned_values[i] = try self.cloneValue(value);
                     values_cloned = i + 1;
                 }
-                try updated_rows.append(storage.Row{ .values = cloned_values });
+                try updated_rows.append(self.connection.allocator, storage.Row{ .values = cloned_values });
             }
         }
 
@@ -732,7 +732,7 @@ pub const VirtualMachine = struct {
         }
 
         var deleted_count: u32 = 0;
-        var surviving_rows = std.array_list.Managed(storage.Row).init(self.connection.allocator);
+        var surviving_rows: std.ArrayList(storage.Row) = .{};
         defer {
             for (surviving_rows.items) |row| {
                 for (row.values) |value| {
@@ -740,7 +740,7 @@ pub const VirtualMachine = struct {
                 }
                 self.connection.allocator.free(row.values);
             }
-            surviving_rows.deinit();
+            surviving_rows.deinit(self.connection.allocator);
         }
 
         for (all_rows) |row| {
@@ -767,7 +767,7 @@ pub const VirtualMachine = struct {
                     cloned_values[i] = try self.cloneValue(value);
                     values_cloned = i + 1;
                 }
-                try surviving_rows.append(storage.Row{ .values = cloned_values });
+                try surviving_rows.append(self.connection.allocator, storage.Row{ .values = cloned_values });
             }
         }
 
@@ -1067,7 +1067,7 @@ pub const VirtualMachine = struct {
                     matched = true;
                     // Add the combined row to results
                     const final_row = try self.combineRows(&left_row, &right_row);
-                    try result.rows.append(final_row);
+                    try result.rows.append(self.connection.allocator, final_row);
                 }
             }
 
@@ -1082,7 +1082,7 @@ pub const VirtualMachine = struct {
                 }
                 
                 const final_row = try self.combineRows(&left_row, &null_right_row);
-                try result.rows.append(final_row);
+                try result.rows.append(self.connection.allocator, final_row);
             }
         }
 
@@ -1117,7 +1117,7 @@ pub const VirtualMachine = struct {
                     }
                     
                     const final_row = try self.combineRows(&null_left_row, &right_row);
-                    try result.rows.append(final_row);
+                    try result.rows.append(self.connection.allocator, final_row);
                 }
             }
         }
@@ -1157,7 +1157,7 @@ pub const VirtualMachine = struct {
         }
 
         // Build hash table from smaller table (right table for now)
-        var hash_map = std.AutoHashMap(u64, std.array_list.Managed(storage.Row)).init(self.connection.allocator);
+        var hash_map = std.AutoHashMap(u64, std.ArrayList(storage.Row)).init(self.connection.allocator);
         defer {
             var iterator = hash_map.iterator();
             while (iterator.next()) |entry| {
@@ -1167,7 +1167,7 @@ pub const VirtualMachine = struct {
                     }
                     self.connection.allocator.free(row.values);
                 }
-                entry.value_ptr.deinit();
+                entry.value_ptr.deinit(self.connection.allocator);
             }
             hash_map.deinit();
         }
@@ -1324,13 +1324,13 @@ pub const VirtualMachine = struct {
             }
             self.connection.allocator.free(row.values);
         }
-        result.rows.clearAndFree();
+        result.rows.clearAndFree(self.connection.allocator);
 
         // Create a single row with the aggregate result
         var aggregate_row_values = try self.connection.allocator.alloc(storage.Value, 1);
         aggregate_row_values[0] = aggregate_value;
 
-        try result.rows.append(storage.Row{ .values = aggregate_row_values });
+        try result.rows.append(self.connection.allocator, storage.Row{ .values = aggregate_row_values });
     }
 
     /// Execute group by operation (stub implementation)
@@ -1405,7 +1405,7 @@ pub const VirtualMachine = struct {
 
 /// Result of query execution
 pub const ExecutionResult = struct {
-    rows: std.array_list.Managed(storage.Row),
+    rows: std.ArrayList(storage.Row),
     affected_rows: u32,
     connection: *db.Connection, // Store connection to access consistent allocator
 
@@ -1431,7 +1431,7 @@ pub const ExecutionResult = struct {
             // Freeing values array
             allocator.free(row.values);
         }
-        self.rows.deinit();
+        self.rows.deinit(allocator);
         // Cleanup completed
     }
 };

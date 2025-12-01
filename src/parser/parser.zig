@@ -59,20 +59,20 @@ pub const Parser = struct {
         try self.expect(.Select);
 
         // Parse columns
-        var columns = std.array_list.Managed(ast.Column).init(self.allocator);
-        defer columns.deinit();
+        var columns: std.ArrayList(ast.Column) = .{};
+        defer columns.deinit(self.allocator);
 
         if (std.meta.activeTag(self.current_token) == .Asterisk) {
             try self.advance();
-            try columns.append(ast.Column{ 
-                .name = try self.allocator.dupe(u8, "*"), 
+            try columns.append(self.allocator, ast.Column{
+                .name = try self.allocator.dupe(u8, "*"),
                 .expression = ast.ColumnExpression{ .Simple = try self.allocator.dupe(u8, "*") },
-                .alias = null 
+                .alias = null,
             });
         } else {
             while (true) {
                 const column = try self.parseColumn();
-                try columns.append(column);
+                try columns.append(self.allocator, column);
 
                 if (std.meta.activeTag(self.current_token) == .Comma) {
                     try self.advance();
@@ -87,13 +87,13 @@ pub const Parser = struct {
         const table_name = try self.expectIdentifier();
 
         // Parse optional JOIN clauses
-        var joins = std.array_list.Managed(ast.JoinClause).init(self.allocator);
-        defer joins.deinit();
-        
+        var joins: std.ArrayList(ast.JoinClause) = .{};
+        defer joins.deinit(self.allocator);
+
         while (true) {
             const join_type = self.parseJoinType() catch break;
             const join = try self.parseJoin(join_type);
-            try joins.append(join);
+            try joins.append(self.allocator, join);
         }
 
         // Parse optional WHERE clause
@@ -109,12 +109,12 @@ pub const Parser = struct {
             try self.advance();
             try self.expect(.By);
             
-            var group_columns = std.array_list.Managed([]const u8).init(self.allocator);
-            defer group_columns.deinit();
-            
+            var group_columns: std.ArrayList([]const u8) = .{};
+            defer group_columns.deinit(self.allocator);
+
             while (true) {
                 const col = try self.expectIdentifier();
-                try group_columns.append(col);
+                try group_columns.append(self.allocator, col);
                 
                 if (std.meta.activeTag(self.current_token) == .Comma) {
                     try self.advance();
@@ -123,7 +123,7 @@ pub const Parser = struct {
                 }
             }
             
-            group_by = try group_columns.toOwnedSlice();
+            group_by = try group_columns.toOwnedSlice(self.allocator);
         }
         
         // Parse optional HAVING clause
@@ -139,8 +139,8 @@ pub const Parser = struct {
             try self.advance();
             try self.expect(.By);
             
-            var order_clauses = std.array_list.Managed(ast.OrderByClause).init(self.allocator);
-            defer order_clauses.deinit();
+            var order_clauses: std.ArrayList(ast.OrderByClause) = .{};
+            defer order_clauses.deinit(self.allocator);
             
             while (true) {
                 const col = try self.expectIdentifier();
@@ -154,7 +154,7 @@ pub const Parser = struct {
                     direction = .Desc;
                 }
                 
-                try order_clauses.append(ast.OrderByClause{
+                try order_clauses.append(self.allocator, ast.OrderByClause{
                     .column = col,
                     .direction = direction,
                 });
@@ -166,7 +166,7 @@ pub const Parser = struct {
                 }
             }
             
-            order_by = try order_clauses.toOwnedSlice();
+            order_by = try order_clauses.toOwnedSlice(self.allocator);
         }
 
         // Parse optional LIMIT clause
@@ -195,9 +195,9 @@ pub const Parser = struct {
 
         return ast.Statement{
             .Select = ast.SelectStatement{
-                .columns = try columns.toOwnedSlice(),
+                .columns = try columns.toOwnedSlice(self.allocator),
                 .table = table_name,
-                .joins = try joins.toOwnedSlice(),
+                .joins = try joins.toOwnedSlice(self.allocator),
                 .where_clause = where_clause,
                 .group_by = group_by,
                 .having = having,
@@ -285,12 +285,12 @@ pub const Parser = struct {
         var columns: ?[][]const u8 = null;
         if (std.meta.activeTag(self.current_token) == .LeftParen) {
             try self.advance();
-            var column_list = std.array_list.Managed([]const u8).init(self.allocator);
-            defer column_list.deinit();
+            var column_list: std.ArrayList([]const u8) = .{};
+            defer column_list.deinit(self.allocator);
 
             while (true) {
                 const col = try self.expectIdentifier();
-                try column_list.append(col);
+                try column_list.append(self.allocator, col);
 
                 if (std.meta.activeTag(self.current_token) == .Comma) {
                     try self.advance();
@@ -300,25 +300,25 @@ pub const Parser = struct {
             }
 
             try self.expect(.RightParen);
-            columns = try column_list.toOwnedSlice();
+            columns = try column_list.toOwnedSlice(self.allocator);
         }
 
         // Parse VALUES clause
         try self.expect(.Values);
 
-        var values = std.array_list.Managed([]ast.Value).init(self.allocator);
-        defer values.deinit();
+        var values: std.ArrayList([]ast.Value) = .{};
+        defer values.deinit(self.allocator);
 
         // Parse value rows
         while (true) {
             try self.expect(.LeftParen);
 
-            var row = std.array_list.Managed(ast.Value).init(self.allocator);
-            defer row.deinit();
+            var row: std.ArrayList(ast.Value) = .{};
+            defer row.deinit(self.allocator);
 
             while (true) {
                 const value = try self.parseValue();
-                try row.append(value);
+                try row.append(self.allocator, value);
 
                 if (std.meta.activeTag(self.current_token) == .Comma) {
                     try self.advance();
@@ -328,7 +328,7 @@ pub const Parser = struct {
             }
 
             try self.expect(.RightParen);
-            try values.append(try row.toOwnedSlice());
+            try values.append(self.allocator, try row.toOwnedSlice(self.allocator));
 
             if (std.meta.activeTag(self.current_token) == .Comma) {
                 try self.advance();
@@ -341,7 +341,7 @@ pub const Parser = struct {
             .Insert = ast.InsertStatement{
                 .table = table_name,
                 .columns = columns,
-                .values = try values.toOwnedSlice(),
+                .values = try values.toOwnedSlice(self.allocator),
                 .or_conflict = or_conflict,
             },
         };
@@ -461,12 +461,12 @@ pub const Parser = struct {
         
         try self.expect(.LeftParen);
         
-        var columns = std.array_list.Managed([]const u8).init(self.allocator);
-        defer columns.deinit();
-        
+        var columns: std.ArrayList([]const u8) = .{};
+        defer columns.deinit(self.allocator);
+
         while (true) {
             const col = try self.expectIdentifier();
-            try columns.append(col);
+            try columns.append(self.allocator, col);
             
             if (std.meta.activeTag(self.current_token) == .Comma) {
                 try self.advance();
@@ -481,7 +481,7 @@ pub const Parser = struct {
             .CreateIndex = ast.CreateIndexStatement{
                 .index_name = index_name,
                 .table_name = table_name,
-                .columns = try columns.toOwnedSlice(),
+                .columns = try columns.toOwnedSlice(self.allocator),
                 .unique = unique,
                 .if_not_exists = if_not_exists,
             },
@@ -524,21 +524,21 @@ pub const Parser = struct {
 
         try self.expect(.LeftParen);
 
-        var columns = std.array_list.Managed(ast.ColumnDefinition).init(self.allocator);
-        defer columns.deinit();
-        
-        var table_constraints = std.array_list.Managed(ast.TableConstraint).init(self.allocator);
-        defer table_constraints.deinit();
+        var columns: std.ArrayList(ast.ColumnDefinition) = .{};
+        defer columns.deinit(self.allocator);
+
+        var table_constraints: std.ArrayList(ast.TableConstraint) = .{};
+        defer table_constraints.deinit(self.allocator);
 
         while (true) {
             // Check if this is a table-level constraint
             if (self.isTableConstraintToken()) {
                 const constraint = try self.parseTableConstraint();
-                try table_constraints.append(constraint);
+                try table_constraints.append(self.allocator, constraint);
             } else {
                 // Parse as column definition
                 const column = try self.parseColumnDefinition();
-                try columns.append(column);
+                try columns.append(self.allocator, column);
             }
 
             if (std.meta.activeTag(self.current_token) == .Comma) {
@@ -553,8 +553,8 @@ pub const Parser = struct {
         return ast.Statement{
             .CreateTable = ast.CreateTableStatement{
                 .table_name = table_name,
-                .columns = try columns.toOwnedSlice(),
-                .table_constraints = try table_constraints.toOwnedSlice(),
+                .columns = try columns.toOwnedSlice(self.allocator),
+                .table_constraints = try table_constraints.toOwnedSlice(self.allocator),
                 .if_not_exists = if_not_exists,
             },
         };
@@ -566,15 +566,15 @@ pub const Parser = struct {
         const table_name = try self.expectIdentifier();
         try self.expect(.Set);
 
-        var assignments = std.array_list.Managed(ast.Assignment).init(self.allocator);
-        defer assignments.deinit();
+        var assignments: std.ArrayList(ast.Assignment) = .{};
+        defer assignments.deinit(self.allocator);
 
         while (true) {
             const column = try self.expectIdentifier();
             try self.expect(.Equal);
             const value = try self.parseValue();
 
-            try assignments.append(ast.Assignment{
+            try assignments.append(self.allocator, ast.Assignment{
                 .column = column,
                 .value = value,
             });
@@ -595,7 +595,7 @@ pub const Parser = struct {
         return ast.Statement{
             .Update = ast.UpdateStatement{
                 .table = table_name,
-                .assignments = try assignments.toOwnedSlice(),
+                .assignments = try assignments.toOwnedSlice(self.allocator),
                 .where_clause = where_clause,
             },
         };
@@ -680,19 +680,19 @@ pub const Parser = struct {
         const name = try self.expectIdentifier();
         const data_type = try self.parseDataType();
 
-        var constraints = std.array_list.Managed(ast.ColumnConstraint).init(self.allocator);
-        defer constraints.deinit();
+        var constraints: std.ArrayList(ast.ColumnConstraint) = .{};
+        defer constraints.deinit(self.allocator);
 
         // Parse constraints
         while (true) {
             const constraint = self.parseConstraint() catch break;
-            try constraints.append(constraint);
+            try constraints.append(self.allocator, constraint);
         }
 
         return ast.ColumnDefinition{
             .name = name,
             .data_type = data_type,
-            .constraints = try constraints.toOwnedSlice(),
+            .constraints = try constraints.toOwnedSlice(self.allocator),
         };
     }
 
@@ -994,13 +994,13 @@ pub const Parser = struct {
         
         try self.expect(.LeftParen);
         
-        var arguments = std.array_list.Managed(ast.FunctionArgument).init(self.allocator);
-        defer arguments.deinit();
-        
+        var arguments: std.ArrayList(ast.FunctionArgument) = .{};
+        defer arguments.deinit(self.allocator);
+
         // Parse arguments
         while (std.meta.activeTag(self.current_token) != .RightParen) {
             const arg = try self.parseFunctionArgument();
-            try arguments.append(arg);
+            try arguments.append(self.allocator, arg);
             
             if (std.meta.activeTag(self.current_token) == .Comma) {
                 try self.advance();
@@ -1013,7 +1013,7 @@ pub const Parser = struct {
         
         return ast.FunctionCall{
             .name = func_name,
-            .arguments = try arguments.toOwnedSlice(),
+            .arguments = try arguments.toOwnedSlice(self.allocator),
         };
     }
     
@@ -1288,13 +1288,13 @@ pub const Parser = struct {
             .Unique => {
                 try self.advance(); // consume UNIQUE
                 try self.expect(.LeftParen);
-                
-                var columns_list = std.array_list.Managed([]const u8).init(self.allocator);
-                defer columns_list.deinit();
-                
+
+                var columns_list: std.ArrayList([]const u8) = .{};
+                defer columns_list.deinit(self.allocator);
+
                 while (true) {
                     const column = try self.expectIdentifier();
-                    try columns_list.append(column);
+                    try columns_list.append(self.allocator, column);
                     
                     if (std.meta.activeTag(self.current_token) == .Comma) {
                         try self.advance();
@@ -1307,7 +1307,7 @@ pub const Parser = struct {
                 
                 return ast.TableConstraint{
                     .Unique = ast.UniqueConstraint{
-                        .columns = try columns_list.toOwnedSlice(),
+                        .columns = try columns_list.toOwnedSlice(self.allocator),
                     }
                 };
             },
@@ -1315,13 +1315,13 @@ pub const Parser = struct {
                 try self.advance(); // consume PRIMARY
                 try self.expect(.Key); // expect KEY
                 try self.expect(.LeftParen);
-                
-                var columns_list = std.array_list.Managed([]const u8).init(self.allocator);
-                defer columns_list.deinit();
-                
+
+                var columns_list: std.ArrayList([]const u8) = .{};
+                defer columns_list.deinit(self.allocator);
+
                 while (true) {
                     const column = try self.expectIdentifier();
-                    try columns_list.append(column);
+                    try columns_list.append(self.allocator, column);
                     
                     if (std.meta.activeTag(self.current_token) == .Comma) {
                         try self.advance();
@@ -1334,7 +1334,7 @@ pub const Parser = struct {
                 
                 return ast.TableConstraint{
                     .PrimaryKey = ast.PrimaryKeyConstraint{
-                        .columns = try columns_list.toOwnedSlice(),
+                        .columns = try columns_list.toOwnedSlice(self.allocator),
                     }
                 };
             },

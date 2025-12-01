@@ -34,10 +34,10 @@ pub const Planner = struct {
 
     /// Plan SELECT statement execution
     fn planSelect(self: *Self, select: *const ast.SelectStatement) !ExecutionPlan {
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
+        var steps: std.ArrayList(ExecutionStep) = .{};
 
         // Table scan step
-        try steps.append(ExecutionStep{
+        try steps.append(self.allocator, ExecutionStep{
             .TableScan = TableScanStep{
                 .table_name = if (select.table) |table| try self.allocator.dupe(u8, table) else "",
             },
@@ -46,12 +46,12 @@ pub const Planner = struct {
         // JOIN steps
         for (select.joins) |join| {
             const join_step = try self.planJoin(select.table orelse "", &join);
-            try steps.append(join_step);
+            try steps.append(self.allocator, join_step);
         }
 
         // Filter step (WHERE clause)
         if (select.where_clause) |where_clause| {
-            try steps.append(ExecutionStep{
+            try steps.append(self.allocator, ExecutionStep{
                 .Filter = FilterStep{
                     .condition = try self.cloneCondition(&where_clause.condition),
                 },
@@ -60,13 +60,13 @@ pub const Planner = struct {
 
         // Check if we have aggregate functions
         const has_aggregates = self.hasAggregates(select.columns);
-        
+
         if (has_aggregates) {
             // Extract aggregate operations
-            var aggregates = std.array_list.Managed(AggregateOperation).init(self.allocator);
+            var aggregates: std.ArrayList(AggregateOperation) = .{};
             for (select.columns) |column| {
                 if (column.expression == .Aggregate) {
-                    try aggregates.append(AggregateOperation{
+                    try aggregates.append(self.allocator, AggregateOperation{
                         .function_type = column.expression.Aggregate.function_type,
                         .column = if (column.expression.Aggregate.column) |col| 
                             try self.allocator.dupe(u8, col) 
@@ -82,56 +82,56 @@ pub const Planner = struct {
             
             if (select.group_by) |group_by| {
                 // GROUP BY aggregation
-                var group_columns = std.array_list.Managed([]const u8).init(self.allocator);
+                var group_columns: std.ArrayList([]const u8) = .{};
                 for (group_by) |col| {
-                    try group_columns.append(try self.allocator.dupe(u8, col));
+                    try group_columns.append(self.allocator, try self.allocator.dupe(u8, col));
                 }
-                
-                try steps.append(ExecutionStep{
+
+                try steps.append(self.allocator, ExecutionStep{
                     .GroupBy = GroupByStep{
-                        .group_columns = try group_columns.toOwnedSlice(),
-                        .aggregates = try aggregates.toOwnedSlice(),
+                        .group_columns = try group_columns.toOwnedSlice(self.allocator),
+                        .aggregates = try aggregates.toOwnedSlice(self.allocator),
                     },
                 });
             } else {
                 // Simple aggregation (no GROUP BY)
-                try steps.append(ExecutionStep{
+                try steps.append(self.allocator, ExecutionStep{
                     .Aggregate = AggregateStep{
-                        .aggregates = try aggregates.toOwnedSlice(),
+                        .aggregates = try aggregates.toOwnedSlice(self.allocator),
                     },
                 });
             }
         } else {
             // Regular projection step (SELECT columns)
-            var columns = std.array_list.Managed([]const u8).init(self.allocator);
+            var columns: std.ArrayList([]const u8) = .{};
             for (select.columns) |column| {
                 switch (column.expression) {
-                    .Simple => |name| try columns.append(try self.allocator.dupe(u8, name)),
+                    .Simple => |name| try columns.append(self.allocator, try self.allocator.dupe(u8, name)),
                     .Aggregate => {
                         // This shouldn't happen if has_aggregates was false
                         return error.UnexpectedAggregate;
                     },
                     .Window => {
                         // Window functions will be handled in a later version
-                        try columns.append(try self.allocator.dupe(u8, "window_result"));
+                        try columns.append(self.allocator, try self.allocator.dupe(u8, "window_result"));
                     },
                     .FunctionCall => {
                         // Function calls will be handled in a later version
-                        try columns.append(try self.allocator.dupe(u8, "function_result"));
+                        try columns.append(self.allocator, try self.allocator.dupe(u8, "function_result"));
                     },
                 }
             }
 
-            try steps.append(ExecutionStep{
+            try steps.append(self.allocator, ExecutionStep{
                 .Project = ProjectStep{
-                    .columns = try columns.toOwnedSlice(),
+                    .columns = try columns.toOwnedSlice(self.allocator),
                 },
             });
         }
 
         // Limit step
         if (select.limit) |limit| {
-            try steps.append(ExecutionStep{
+            try steps.append(self.allocator, ExecutionStep{
                 .Limit = LimitStep{
                     .count = limit,
                     .offset = select.offset orelse 0,
@@ -140,7 +140,7 @@ pub const Planner = struct {
         }
 
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
@@ -216,50 +216,50 @@ pub const Planner = struct {
 
     /// Plan INSERT statement execution
     fn planInsert(self: *Self, insert: *const ast.InsertStatement) !ExecutionPlan {
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
+        var steps: std.ArrayList(ExecutionStep) = .{};
 
         // Clone columns if provided
         var columns: ?[][]const u8 = null;
         if (insert.columns) |cols| {
-            var cloned_cols = std.array_list.Managed([]const u8).init(self.allocator);
+            var cloned_cols: std.ArrayList([]const u8) = .{};
             for (cols) |col| {
-                try cloned_cols.append(try self.allocator.dupe(u8, col));
+                try cloned_cols.append(self.allocator, try self.allocator.dupe(u8, col));
             }
-            columns = try cloned_cols.toOwnedSlice();
+            columns = try cloned_cols.toOwnedSlice(self.allocator);
         }
 
         // Clone values
-        var values = std.array_list.Managed([]storage.Value).init(self.allocator);
+        var values: std.ArrayList([]storage.Value) = .{};
         for (insert.values) |row| {
-            var cloned_row = std.array_list.Managed(storage.Value).init(self.allocator);
+            var cloned_row: std.ArrayList(storage.Value) = .{};
             for (row) |value| {
-                try cloned_row.append(try self.cloneValue(value));
+                try cloned_row.append(self.allocator, try self.cloneValue(value));
             }
-            try values.append(try cloned_row.toOwnedSlice());
+            try values.append(self.allocator, try cloned_row.toOwnedSlice(self.allocator));
         }
 
-        try steps.append(ExecutionStep{
+        try steps.append(self.allocator, ExecutionStep{
             .Insert = InsertStep{
                 .table_name = try self.allocator.dupe(u8, insert.table),
                 .columns = columns,
-                .values = try values.toOwnedSlice(),
+                .values = try values.toOwnedSlice(self.allocator),
             },
         });
 
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
 
     /// Plan CREATE TABLE statement execution
     fn planCreateTable(self: *Self, create: *const ast.CreateTableStatement) !ExecutionPlan {
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
+        var steps: std.ArrayList(ExecutionStep) = .{};
 
         // Clone column definitions
-        var columns = std.array_list.Managed(storage.Column).init(self.allocator);
+        var columns: std.ArrayList(storage.Column) = .{};
         for (create.columns) |col_def| {
-            try columns.append(storage.Column{
+            try columns.append(self.allocator, storage.Column{
                 .name = try self.allocator.dupe(u8, col_def.name),
                 .data_type = switch (col_def.data_type) {
                     .Integer => storage.DataType.Integer,
@@ -312,28 +312,28 @@ pub const Planner = struct {
             });
         }
 
-        try steps.append(ExecutionStep{
+        try steps.append(self.allocator, ExecutionStep{
             .CreateTable = CreateTableStep{
                 .table_name = try self.allocator.dupe(u8, create.table_name),
-                .columns = try columns.toOwnedSlice(),
+                .columns = try columns.toOwnedSlice(self.allocator),
                 .if_not_exists = create.if_not_exists,
             },
         });
 
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
 
     /// Plan UPDATE statement execution
     fn planUpdate(self: *Self, update: *const ast.UpdateStatement) !ExecutionPlan {
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
+        var steps: std.ArrayList(ExecutionStep) = .{};
 
         // Clone assignments
-        var assignments = std.array_list.Managed(UpdateAssignment).init(self.allocator);
+        var assignments: std.ArrayList(UpdateAssignment) = .{};
         for (update.assignments) |assignment| {
-            try assignments.append(UpdateAssignment{
+            try assignments.append(self.allocator, UpdateAssignment{
                 .column = try self.allocator.dupe(u8, assignment.column),
                 .value = try self.cloneValue(assignment.value),
             });
@@ -344,30 +344,30 @@ pub const Planner = struct {
             condition = try self.cloneCondition(&where_clause.condition);
         }
 
-        try steps.append(ExecutionStep{
+        try steps.append(self.allocator, ExecutionStep{
             .Update = UpdateStep{
                 .table_name = try self.allocator.dupe(u8, update.table),
-                .assignments = try assignments.toOwnedSlice(),
+                .assignments = try assignments.toOwnedSlice(self.allocator),
                 .condition = condition,
             },
         });
 
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
 
     /// Plan DELETE statement execution
     fn planDelete(self: *Self, delete: *const ast.DeleteStatement) !ExecutionPlan {
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
+        var steps: std.ArrayList(ExecutionStep) = .{};
 
         var condition: ?ast.Condition = null;
         if (delete.where_clause) |where_clause| {
             condition = try self.cloneCondition(&where_clause.condition);
         }
 
-        try steps.append(ExecutionStep{
+        try steps.append(self.allocator, ExecutionStep{
             .Delete = DeleteStep{
                 .table_name = try self.allocator.dupe(u8, delete.table),
                 .condition = condition,
@@ -375,67 +375,67 @@ pub const Planner = struct {
         });
 
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
-    
+
     /// Plan transaction statement
     fn planTransaction(self: *Self, trans: *const ast.TransactionStatement) !ExecutionPlan {
         _ = trans;
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
-        
-        try steps.append(ExecutionStep{
+        var steps: std.ArrayList(ExecutionStep) = .{};
+
+        try steps.append(self.allocator, ExecutionStep{
             .BeginTransaction = {},
         });
-        
+
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
-    
+
     /// Plan commit statement
     fn planCommit(self: *Self, trans: *const ast.TransactionStatement) !ExecutionPlan {
         _ = trans;
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
-        
-        try steps.append(ExecutionStep{
+        var steps: std.ArrayList(ExecutionStep) = .{};
+
+        try steps.append(self.allocator, ExecutionStep{
             .Commit = {},
         });
-        
+
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
-    
+
     /// Plan rollback statement
     fn planRollback(self: *Self, trans: *const ast.TransactionStatement) !ExecutionPlan {
         _ = trans;
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
-        
-        try steps.append(ExecutionStep{
+        var steps: std.ArrayList(ExecutionStep) = .{};
+
+        try steps.append(self.allocator, ExecutionStep{
             .Rollback = {},
         });
-        
+
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
-    
+
     /// Plan create index statement
     fn planCreateIndex(self: *Self, create_idx: *const ast.CreateIndexStatement) !ExecutionPlan {
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
-        
+        var steps: std.ArrayList(ExecutionStep) = .{};
+
         // Clone columns
         var columns = try self.allocator.alloc([]const u8, create_idx.columns.len);
         for (create_idx.columns, 0..) |col, i| {
             columns[i] = try self.allocator.dupe(u8, col);
         }
-        
-        try steps.append(ExecutionStep{
+
+        try steps.append(self.allocator, ExecutionStep{
             .CreateIndex = CreateIndexStep{
                 .index_name = try self.allocator.dupe(u8, create_idx.index_name),
                 .table_name = try self.allocator.dupe(u8, create_idx.table_name),
@@ -446,16 +446,16 @@ pub const Planner = struct {
         });
         
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
-    
+
     /// Plan drop index statement
     fn planDropIndex(self: *Self, drop_idx: *const ast.DropIndexStatement) !ExecutionPlan {
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
-        
-        try steps.append(ExecutionStep{
+        var steps: std.ArrayList(ExecutionStep) = .{};
+
+        try steps.append(self.allocator, ExecutionStep{
             .DropIndex = DropIndexStep{
                 .index_name = try self.allocator.dupe(u8, drop_idx.index_name),
                 .if_exists = drop_idx.if_exists,
@@ -463,7 +463,7 @@ pub const Planner = struct {
         });
         
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }
@@ -619,20 +619,20 @@ pub const Planner = struct {
     
     /// Plan Common Table Expression (WITH clause) execution
     fn planWith(self: *Self, with: *const ast.WithStatement) !ExecutionPlan {
-        var steps = std.array_list.Managed(ExecutionStep).init(self.allocator);
-        
+        var steps: std.ArrayList(ExecutionStep) = .{};
+
         // For now, just plan the main query (CTE support will be enhanced later)
         _ = with.cte_definitions; // TODO: Implement full CTE planning
-        
+
         const main_plan = try self.planSelect(&with.main_query);
-        
+
         // Append main query steps
         for (main_plan.steps) |step| {
-            try steps.append(step);
+            try steps.append(self.allocator, step);
         }
-        
+
         return ExecutionPlan{
-            .steps = try steps.toOwnedSlice(),
+            .steps = try steps.toOwnedSlice(self.allocator),
             .allocator = self.allocator,
         };
     }

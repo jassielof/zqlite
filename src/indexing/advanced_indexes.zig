@@ -234,7 +234,7 @@ pub const MultiColumnIndex = struct {
     table: []const u8,
     columns: [][]const u8,
     // Use a sorted array for range queries on composite keys
-    entries: std.array_list.Managed(Entry),
+    entries: std.ArrayList(Entry),
     allocator: std.mem.Allocator,
 
     const Entry = struct {
@@ -256,7 +256,7 @@ pub const MultiColumnIndex = struct {
             .name = try allocator.dupe(u8, name),
             .table = try allocator.dupe(u8, table),
             .columns = owned_columns,
-            .entries = std.array_list.Managed(Entry).init(allocator),
+            .entries = .{},
             .allocator = allocator,
         };
         return index;
@@ -280,7 +280,7 @@ pub const MultiColumnIndex = struct {
             insert_pos += 1;
         }
 
-        try self.entries.insert(insert_pos, entry);
+        try self.entries.insert(self.allocator, insert_pos, entry);
     }
 
     /// Remove from multi-column index
@@ -291,7 +291,7 @@ pub const MultiColumnIndex = struct {
         for (self.entries.items, 0..) |entry, i| {
             if (std.mem.eql(u8, entry.composite_key, composite_key) and entry.row_id == row_id) {
                 self.allocator.free(entry.composite_key);
-                _ = self.entries.orderedRemove(i);
+                _ = self.entries.orderedRemove(self.allocator, i);
                 break;
             }
         }
@@ -304,53 +304,53 @@ pub const MultiColumnIndex = struct {
         const end_key = try self.createCompositeKey(end_values);
         defer self.allocator.free(end_key);
 
-        var result = std.array_list.Managed(storage.RowId).init(self.allocator);
+        var result: std.ArrayList(storage.RowId) = .{};
 
         for (self.entries.items) |entry| {
             if (std.mem.order(u8, entry.composite_key, start_key) != .lt and
                 std.mem.order(u8, entry.composite_key, end_key) != .gt)
             {
-                try result.append(entry.row_id);
+                try result.append(self.allocator, entry.row_id);
             }
         }
 
-        return try result.toOwnedSlice();
+        return try result.toOwnedSlice(self.allocator);
     }
 
     /// Create a composite key from multiple values
     fn createCompositeKey(self: *Self, values: []storage.Value) ![]u8 {
-        var key_parts = std.array_list.Managed(u8).init(self.allocator);
+        var key_parts: std.ArrayList(u8) = .{};
 
         for (values) |value| {
             switch (value) {
                 .Integer => |int_val| {
-                    try key_parts.appendSlice(std.mem.asBytes(&int_val));
+                    try key_parts.appendSlice(self.allocator, std.mem.asBytes(&int_val));
                 },
                 .Real => |real_val| {
-                    try key_parts.appendSlice(std.mem.asBytes(&real_val));
+                    try key_parts.appendSlice(self.allocator, std.mem.asBytes(&real_val));
                 },
                 .Text => |text_val| {
-                    try key_parts.appendSlice(text_val);
+                    try key_parts.appendSlice(self.allocator, text_val);
                 },
                 .Blob => |blob_val| {
-                    try key_parts.appendSlice(blob_val);
+                    try key_parts.appendSlice(self.allocator, blob_val);
                 },
                 .Null => {
-                    try key_parts.appendSlice("NULL");
+                    try key_parts.appendSlice(self.allocator, "NULL");
                 },
             }
             // Add separator
-            try key_parts.append(0);
+            try key_parts.append(self.allocator, 0);
         }
 
-        return try key_parts.toOwnedSlice();
+        return try key_parts.toOwnedSlice(self.allocator);
     }
 
     pub fn deinit(self: *Self) void {
         for (self.entries.items) |entry| {
             self.allocator.free(entry.composite_key);
         }
-        self.entries.deinit();
+        self.entries.deinit(self.allocator);
         self.allocator.free(self.name);
         self.allocator.free(self.table);
         for (self.columns) |column| {
@@ -373,28 +373,29 @@ pub const BTreeIndex = struct {
     const Self = @This();
 
     const Node = struct {
-        keys: std.array_list.Managed(IndexKey),
-        children: std.array_list.Managed(?*Node),
+        keys: std.ArrayList(IndexKey),
+        children: std.ArrayList(?*Node),
         is_leaf: bool,
         parent: ?*Node,
+        allocator: std.mem.Allocator,
 
         const IndexKey = struct {
             value: storage.Value,
-            row_ids: std.array_list.Managed(storage.RowId),
+            row_ids: std.ArrayList(storage.RowId),
 
             pub fn deinit(self: *IndexKey, allocator: std.mem.Allocator) void {
-                _ = allocator;
-                self.row_ids.deinit();
+                self.row_ids.deinit(allocator);
             }
         };
 
         pub fn init(allocator: std.mem.Allocator, is_leaf: bool) !*Node {
             const node = try allocator.create(Node);
             node.* = Node{
-                .keys = std.array_list.Managed(IndexKey).init(allocator),
-                .children = std.array_list.Managed(?*Node).init(allocator),
+                .keys = .{},
+                .children = .{},
                 .is_leaf = is_leaf,
                 .parent = null,
+                .allocator = allocator,
             };
             return node;
         }
@@ -403,14 +404,14 @@ pub const BTreeIndex = struct {
             for (self.keys.items) |*key| {
                 key.deinit(allocator);
             }
-            self.keys.deinit();
+            self.keys.deinit(allocator);
 
             for (self.children.items) |child| {
                 if (child) |c| {
                     c.deinit(allocator);
                 }
             }
-            self.children.deinit();
+            self.children.deinit(allocator);
             allocator.destroy(self);
         }
 
@@ -443,7 +444,7 @@ pub const BTreeIndex = struct {
         // Check if root is full and needs splitting
         if (self.root.?.isFull(self.order)) {
             const new_root = try Node.init(self.allocator, false);
-            try new_root.children.append(self.root);
+            try new_root.children.append(self.allocator, self.root);
             self.root.?.parent = new_root;
             try self.splitChild(new_root, 0);
             self.root = new_root;
@@ -455,11 +456,12 @@ pub const BTreeIndex = struct {
 
         if (node.is_leaf) {
             // Insert into leaf node in sorted order
-            try node.keys.append(Node.IndexKey{
+            var new_row_ids: std.ArrayList(storage.RowId) = .{};
+            try new_row_ids.append(self.allocator, row_id);
+            try node.keys.append(self.allocator, Node.IndexKey{
                 .value = value,
-                .row_ids = std.array_list.Managed(storage.RowId).init(self.allocator),
+                .row_ids = new_row_ids,
             });
-            try node.keys.items[node.keys.items.len - 1].row_ids.append(row_id);
 
             // Simple insertion sort for leaf nodes
             i -= 1;
@@ -498,36 +500,36 @@ pub const BTreeIndex = struct {
 
         // Move half the keys to new child
         for (full_child.keys.items[mid + 1 ..]) |key| {
-            try new_child.keys.append(key);
+            try new_child.keys.append(self.allocator, key);
         }
         full_child.keys.shrinkRetainingCapacity(mid);
 
         // Move children if not leaf
         if (!full_child.is_leaf) {
             for (full_child.children.items[mid + 1 ..]) |child| {
-                try new_child.children.append(child);
+                try new_child.children.append(self.allocator, child);
                 if (child) |c| c.parent = new_child;
             }
             full_child.children.shrinkRetainingCapacity(mid + 1);
         }
 
         // Move median key up to parent
-        try parent.children.insert(child_index + 1, new_child);
-        try parent.keys.insert(child_index, full_child.keys.items[mid]);
+        try parent.children.insert(self.allocator, child_index + 1, new_child);
+        try parent.keys.insert(self.allocator, child_index, full_child.keys.items[mid]);
 
         new_child.parent = parent;
     }
 
     /// Range query on B-tree
     pub fn rangeQuery(self: *Self, start_value: ?storage.Value, end_value: ?storage.Value) ![]storage.RowId {
-        var result = std.array_list.Managed(storage.RowId).init(self.allocator);
+        var result: std.ArrayList(storage.RowId) = .{};
         if (self.root) |root| {
             try self.rangeQueryRecursive(root, start_value, end_value, &result);
         }
-        return try result.toOwnedSlice();
+        return try result.toOwnedSlice(self.allocator);
     }
 
-    fn rangeQueryRecursive(self: *Self, node: *Node, start_value: ?storage.Value, end_value: ?storage.Value, result: *std.array_list.Managed(storage.RowId)) !void {
+    fn rangeQueryRecursive(self: *Self, node: *Node, start_value: ?storage.Value, end_value: ?storage.Value, result: *std.ArrayList(storage.RowId)) !void {
         for (node.keys.items, 0..) |key, i| {
             // Check if key is in range
             const in_range = blk: {
@@ -541,7 +543,7 @@ pub const BTreeIndex = struct {
             };
 
             if (in_range) {
-                try result.appendSlice(key.row_ids.items);
+                try result.appendSlice(self.allocator, key.row_ids.items);
             }
 
             // Recursively search children
@@ -605,7 +607,7 @@ pub const BTreeIndex = struct {
 
 /// Optimized composite key for multi-column indexes
 pub const CompositeKey = struct {
-    values: std.array_list.Managed(storage.Value),
+    values: std.ArrayList(storage.Value),
     allocator: std.mem.Allocator,
     hash_cache: ?u64 = null, // Cached hash for performance
 
@@ -613,19 +615,19 @@ pub const CompositeKey = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .values = std.array_list.Managed(storage.Value).init(allocator),
+            .values = .{},
             .allocator = allocator,
         };
     }
 
     pub fn addValue(self: *Self, value: storage.Value) !void {
-        try self.values.append(value);
+        try self.values.append(self.allocator, value);
         self.hash_cache = null; // Invalidate cache
     }
 
     pub fn clone(self: *Self) !Self {
         var new_key = Self.init(self.allocator);
-        try new_key.values.appendSlice(self.values.items);
+        try new_key.values.appendSlice(self.allocator, self.values.items);
         new_key.hash_cache = self.hash_cache;
         return new_key;
     }
@@ -765,7 +767,7 @@ pub const CompositeKey = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.values.deinit();
+        self.values.deinit(self.allocator);
     }
 };
 
@@ -823,10 +825,10 @@ pub const OptimizedMultiColumnIndex = struct {
         const result = try self.entries.getOrPut(key);
         if (!result.found_existing) {
             result.key_ptr.* = try key.clone();
-            result.value_ptr.* = std.array_list.Managed(storage.RowId).init(self.allocator);
+            result.value_ptr.* = .{};
         }
 
-        try result.value_ptr.append(row_id);
+        try result.value_ptr.append(self.allocator, row_id);
     }
 
     /// Optimized lookup with prefix matching
@@ -835,7 +837,7 @@ pub const OptimizedMultiColumnIndex = struct {
             return error.TooManyValues;
         }
 
-        var result = std.array_list.Managed(storage.RowId).init(self.allocator);
+        var result: std.ArrayList(storage.RowId) = .{};
 
         if (values.len == self.columns.len) {
             // Exact match - use hash map
@@ -847,7 +849,7 @@ pub const OptimizedMultiColumnIndex = struct {
             }
 
             if (self.entries.get(key)) |row_ids| {
-                try result.appendSlice(row_ids.items);
+                try result.appendSlice(self.allocator, row_ids.items);
             }
         } else {
             // Prefix match - iterate through all entries
@@ -864,19 +866,19 @@ pub const OptimizedMultiColumnIndex = struct {
                 }
 
                 if (matches) {
-                    try result.appendSlice(entry.value_ptr.items);
+                    try result.appendSlice(self.allocator, entry.value_ptr.items);
                 }
             }
         }
 
-        return try result.toOwnedSlice();
+        return try result.toOwnedSlice(self.allocator);
     }
 
     pub fn deinit(self: *Self) void {
         var iterator = self.entries.iterator();
         while (iterator.next()) |entry| {
             entry.key_ptr.deinit();
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(self.allocator);
         }
         self.entries.deinit();
 
@@ -889,24 +891,24 @@ pub const OptimizedMultiColumnIndex = struct {
 
 /// Enhanced Index Manager with B-tree, bloom filters and optimized composite key support
 pub const AdvancedIndexManager = struct {
-    hash_indexes: std.array_list.Managed(*HashIndex),
-    unique_indexes: std.array_list.Managed(*UniqueIndex),
-    multi_indexes: std.array_list.Managed(*MultiColumnIndex),
-    btree_indexes: std.array_list.Managed(*BTreeIndex),
-    optimized_multi_indexes: std.array_list.Managed(*OptimizedMultiColumnIndex),
-    bloom_hash_indexes: std.array_list.Managed(*BloomHashIndex),
+    hash_indexes: std.ArrayList(*HashIndex),
+    unique_indexes: std.ArrayList(*UniqueIndex),
+    multi_indexes: std.ArrayList(*MultiColumnIndex),
+    btree_indexes: std.ArrayList(*BTreeIndex),
+    optimized_multi_indexes: std.ArrayList(*OptimizedMultiColumnIndex),
+    bloom_hash_indexes: std.ArrayList(*BloomHashIndex),
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .hash_indexes = std.array_list.Managed(*HashIndex).init(allocator),
-            .unique_indexes = std.array_list.Managed(*UniqueIndex).init(allocator),
-            .multi_indexes = std.array_list.Managed(*MultiColumnIndex).init(allocator),
-            .btree_indexes = std.array_list.Managed(*BTreeIndex).init(allocator),
-            .optimized_multi_indexes = std.array_list.Managed(*OptimizedMultiColumnIndex).init(allocator),
-            .bloom_hash_indexes = std.array_list.Managed(*BloomHashIndex).init(allocator),
+            .hash_indexes = .{},
+            .unique_indexes = .{},
+            .multi_indexes = .{},
+            .btree_indexes = .{},
+            .optimized_multi_indexes = .{},
+            .bloom_hash_indexes = .{},
             .allocator = allocator,
         };
     }
@@ -914,19 +916,19 @@ pub const AdvancedIndexManager = struct {
     /// Create a B-tree index for range queries
     pub fn createBTreeIndex(self: *Self, name: []const u8, table: []const u8, column: []const u8) !void {
         const index = try BTreeIndex.init(self.allocator, name, table, column);
-        try self.btree_indexes.append(index);
+        try self.btree_indexes.append(self.allocator, index);
     }
 
     /// Create an optimized multi-column index
     pub fn createOptimizedMultiIndex(self: *Self, name: []const u8, table: []const u8, columns: []const []const u8) !void {
         const index = try OptimizedMultiColumnIndex.init(self.allocator, name, table, columns);
-        try self.optimized_multi_indexes.append(index);
+        try self.optimized_multi_indexes.append(self.allocator, index);
     }
 
     /// Create a bloom hash index for fast existence checks
     pub fn createBloomHashIndex(self: *Self, name: []const u8, table: []const u8, column: []const u8, expected_items: usize) !void {
         const index = try BloomHashIndex.init(self.allocator, name, table, column, expected_items);
-        try self.bloom_hash_indexes.append(index);
+        try self.bloom_hash_indexes.append(self.allocator, index);
     }
 
     /// Insert into B-tree indexes
@@ -999,7 +1001,7 @@ pub const AdvancedIndexManager = struct {
     /// Create a hash index
     pub fn createHashIndex(self: *Self, name: []const u8, table: []const u8, column: []const u8) !void {
         const index = try HashIndex.init(self.allocator, name, table, column);
-        try self.hash_indexes.append(index);
+        try self.hash_indexes.append(self.allocator, index);
     }
 
     /// Create a unique index
@@ -1007,7 +1009,7 @@ pub const AdvancedIndexManager = struct {
         var columns = try self.allocator.alloc([]const u8, 1);
         columns[0] = column;
         const index = try UniqueIndex.init(self.allocator, name, table, columns);
-        try self.unique_indexes.append(index);
+        try self.unique_indexes.append(self.allocator, index);
     }
 
     /// Insert into hash indexes
@@ -1065,32 +1067,32 @@ pub const AdvancedIndexManager = struct {
         for (self.hash_indexes.items) |index| {
             index.deinit();
         }
-        self.hash_indexes.deinit();
+        self.hash_indexes.deinit(self.allocator);
 
         for (self.unique_indexes.items) |index| {
             index.deinit();
         }
-        self.unique_indexes.deinit();
+        self.unique_indexes.deinit(self.allocator);
 
         for (self.multi_indexes.items) |index| {
             index.deinit();
         }
-        self.multi_indexes.deinit();
+        self.multi_indexes.deinit(self.allocator);
 
         for (self.btree_indexes.items) |index| {
             index.deinit();
         }
-        self.btree_indexes.deinit();
+        self.btree_indexes.deinit(self.allocator);
 
         for (self.optimized_multi_indexes.items) |index| {
             index.deinit();
         }
-        self.optimized_multi_indexes.deinit();
+        self.optimized_multi_indexes.deinit(self.allocator);
 
         for (self.bloom_hash_indexes.items) |index| {
             index.deinit();
         }
-        self.bloom_hash_indexes.deinit();
+        self.bloom_hash_indexes.deinit(self.allocator);
     }
 };
 

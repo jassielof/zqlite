@@ -1,9 +1,21 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 // Version information
 pub const version = @import("version.zig");
 
-// New data structures for v1.2.5
+// Build profile and feature flags
+pub const profile = build_options.profile;
+pub const features = struct {
+    pub const crypto = build_options.enable_crypto;
+    pub const transport = build_options.enable_transport;
+    pub const json = build_options.enable_json;
+    pub const performance = build_options.enable_performance;
+    pub const concurrent = build_options.enable_concurrent;
+    pub const ffi = build_options.enable_ffi;
+};
+
+// Open options
 pub const OpenOptions = struct {
     enable_async: bool = false,
     connection_pool_size: u32 = 4,
@@ -46,67 +58,47 @@ pub const cli = @import("shell/cli.zig");
 // Structured logging
 pub const logging = @import("logging/logger.zig");
 
-// Advanced cryptographic features (optional - v1.2.2)
-pub const crypto = if (@import("builtin").is_test or @hasDecl(@import("root"), "zqlite_enable_crypto"))
+// Post-quantum cryptography (profile: full, or -Dcrypto=true)
+pub const crypto = if (build_options.enable_crypto)
     struct {
         pub const CryptoEngine = @import("crypto/secure_storage.zig").CryptoEngine;
         pub const CryptoTransactionLog = @import("crypto/secure_storage.zig").CryptoTransactionLog;
-        pub const EncryptedField = struct {
-            ciphertext: []u8,
-            nonce: [12]u8,
-            tag: [16]u8,
-
-            pub fn deinit(self: *EncryptedField, allocator: std.mem.Allocator) void {
-                allocator.free(self.ciphertext);
-            }
-        };
-        pub const ZKProof = struct {
-            proof_data: []u8,
-            commitment: [32]u8,
-            challenge: [32]u8,
-
-            pub fn deinit(self: *ZKProof, allocator: std.mem.Allocator) void {
-                allocator.free(self.proof_data);
-            }
-        };
-        pub const HybridSignature = struct {
-            classical: [64]u8, // Ed25519 signature
-            post_quantum: []u8, // ML-DSA-65 signature
-
-            pub fn deinit(self: *HybridSignature, allocator: std.mem.Allocator) void {
-                allocator.free(self.post_quantum);
-            }
-        };
+        pub const interface = @import("crypto/interface.zig");
+        pub const hash_verification = @import("crypto/hash_verification.zig");
+        pub const zns_adapter = @import("crypto/zns_adapter.zig");
     }
 else
     struct {
-        // Crypto disabled - stub implementations
-        pub const CryptoEngine = @TypeOf(null);
-        pub const CryptoTransactionLog = @TypeOf(null);
-        pub const EncryptedField = @TypeOf(null);
-        pub const ZKProof = @TypeOf(null);
-        pub const HybridSignature = @TypeOf(null);
+        pub const CryptoEngine = void;
+        pub const CryptoTransactionLog = void;
     };
 
-// Enhanced async database operations with zsync v0.5.4 features
-pub const async_ops = @import("concurrent/async_operations.zig");
+// Async operations (profile: advanced+, or -Dconcurrent=true)
+pub const async_ops = if (build_options.enable_concurrent)
+    @import("concurrent/async_operations.zig")
+else
+    struct {};
 
 // SQLite compatibility layer
 pub const sqlite_compat = @import("sqlite_compat/sqlite_compatibility.zig");
 
-// Performance optimizations
-pub const performance = @import("performance/cache_manager.zig");
-pub const query_cache = @import("performance/query_cache.zig");
+// Performance optimizations (profile: advanced+, or -Dperformance=true)
+pub const performance = if (build_options.enable_performance)
+    @import("performance/cache_manager.zig")
+else
+    struct {};
 
-// Zeppelin package manager integration
-pub const zeppelin = @import("zeppelin/package_manager.zig");
+pub const query_cache = if (build_options.enable_performance)
+    @import("performance/query_cache.zig")
+else
+    struct {};
 
-// Enhanced error reporting  
+// Error handling
 pub const error_handling = @import("error_handling/enhanced_errors.zig");
 pub const database_errors = @import("error_handling/database_errors.zig");
 
-// Post-quantum transport (optional - v1.2.2)
-pub const transport = if (@import("builtin").is_test or @hasDecl(@import("root"), "zqlite_enable_transport"))
+// PQ-QUIC transport (profile: full, or -Dtransport=true)
+pub const transport = if (build_options.enable_transport)
     struct {
         pub const Transport = @import("transport/transport.zig").Transport;
         pub const PQQuicTransport = @import("transport/pq_quic.zig").PQQuicTransport;
@@ -114,17 +106,16 @@ pub const transport = if (@import("builtin").is_test or @hasDecl(@import("root")
     }
 else
     struct {
-        // Transport disabled - stub implementations
-        pub const Transport = @TypeOf(null);
-        pub const PQQuicTransport = @TypeOf(null);
-        pub const PQDatabaseTransport = @TypeOf(null);
+        pub const Transport = void;
+        pub const PQQuicTransport = void;
+        pub const PQDatabaseTransport = void;
     };
 
 // Advanced indexing
 pub const advanced_indexes = @import("indexing/advanced_indexes.zig");
 
-// Version and metadata - now centralized in version.zig
-pub const build_info = version.FULL_VERSION_STRING ++ " - PostgreSQL-compatible embedded database with enterprise features";
+// Version and metadata
+pub const build_info = version.FULL_VERSION_STRING ++ " [" ++ build_options.profile ++ "]";
 
 // Main API functions
 pub fn open(allocator: std.mem.Allocator, path: []const u8) !*db.Connection {
@@ -140,8 +131,11 @@ pub fn createConnectionPool(allocator: std.mem.Allocator, database_path: ?[]cons
     return connection_pool.ConnectionPool.init(allocator, database_path, min_connections, max_connections);
 }
 
-/// Create query cache for improved performance
+/// Create query cache (requires performance feature)
 pub fn createQueryCache(allocator: std.mem.Allocator, max_entries: usize, max_memory_bytes: usize) !*query_cache.QueryCache {
+    if (!build_options.enable_performance) {
+        @compileError("Query cache requires -Dperformance=true or profile=advanced/full");
+    }
     return query_cache.QueryCache.init(allocator, max_entries, max_memory_bytes);
 }
 
@@ -160,22 +154,33 @@ pub fn uuidToString(uuid: [16]u8, allocator: std.mem.Allocator) ![]u8 {
     return ast.UUIDUtils.toString(uuid, allocator);
 }
 
-// Advanced print function for demo purposes
-pub fn advancedPrint() !void {
-    std.debug.print("🟦 {s}\n", .{build_info});
-    std.debug.print("   PostgreSQL Features: JSON/JSONB, UUIDs, Arrays, Window Functions, CTEs\n", .{});
-    std.debug.print("   Performance: Connection Pooling, Query Caching, Prepared Statements\n", .{});
-    std.debug.print("   Enterprise: Enhanced Error Handling, Transaction Safety\n", .{});
-    std.debug.print("   Status: Production Ready v1.3.0! 🚀\n", .{});
+/// Print build info for demos
+pub fn printBuildInfo() void {
+    std.debug.print("ZQLite {s}\n", .{version.VERSION_STRING});
+    std.debug.print("  Profile: {s}\n", .{build_options.profile});
+    std.debug.print("  Features:\n", .{});
+    if (build_options.enable_crypto) std.debug.print("    - Post-quantum crypto\n", .{});
+    if (build_options.enable_transport) std.debug.print("    - PQ-QUIC transport\n", .{});
+    if (build_options.enable_json) std.debug.print("    - JSON support\n", .{});
+    if (build_options.enable_performance) std.debug.print("    - Query cache & connection pool\n", .{});
+    if (build_options.enable_concurrent) std.debug.print("    - Async operations\n", .{});
+    if (build_options.enable_ffi) std.debug.print("    - C API (FFI)\n", .{});
 }
 
 // Tests
 test "zqlite version info" {
-    const version_mod = @import("version.zig");
-    try std.testing.expect(std.mem.eql(u8, version_mod.VERSION_STRING, "1.3.3"));
+    try std.testing.expect(std.mem.eql(u8, version.VERSION_STRING, "1.3.5"));
 }
 
 test "build info contains version" {
-    const version_mod = @import("version.zig");
-    try std.testing.expect(std.mem.indexOf(u8, version_mod.FULL_VERSION_STRING, "ZQLite") != null);
+    try std.testing.expect(std.mem.indexOf(u8, version.FULL_VERSION_STRING, "ZQLite") != null);
+}
+
+test "features reflect build options" {
+    if (features.crypto) {
+        _ = crypto.CryptoEngine;
+    }
+    if (features.transport) {
+        _ = transport.Transport;
+    }
 }

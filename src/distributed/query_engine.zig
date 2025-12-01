@@ -214,9 +214,9 @@ pub const DistributedQueryEngine = struct {
     
     /// Execute multi-node plan
     fn executeMultiNodePlan(self: *Self, plan: ExecutionPlan) !DistributedQueryResult {
-        var results = std.array_list.Managed(NodeQueryResult).init(self.allocator);
-        defer results.deinit();
-        
+        var results: std.ArrayList(NodeQueryResult) = .{};
+        defer results.deinit(self.allocator);
+
         // Execute on all target nodes
         for (plan.target_nodes) |node| {
             const query_request = QueryRequest{
@@ -224,9 +224,9 @@ pub const DistributedQueryEngine = struct {
                 .parameters = plan.parameters,
                 .timeout_ms = 30000,
             };
-            
+
             const result = try self.execution_coordinator.executeOnNode(node, query_request);
-            try results.append(result);
+            try results.append(self.allocator, result);
         }
         
         // Aggregate results
@@ -437,8 +437,8 @@ const ResultAggregator = struct {
     pub fn aggregateResults(self: *Self, results: []const NodeQueryResult) !DistributedQueryResult {
         var total_affected_rows: u64 = 0;
         var max_execution_time: u64 = 0;
-        var all_rows = std.array_list.Managed([]storage.Value).init(self.allocator);
-        
+        var all_rows: std.ArrayList([]storage.Value) = .{};
+
         for (results) |result| {
             if (!result.success) {
                 return DistributedQueryResult{
@@ -450,12 +450,12 @@ const ResultAggregator = struct {
                     .nodes_involved = 0,
                 };
             }
-            
+
             total_affected_rows += result.affected_rows;
             max_execution_time = @max(max_execution_time, result.execution_time_us);
-            
+
             for (result.rows) |row| {
-                try all_rows.append(row);
+                try all_rows.append(self.allocator, row);
             }
         }
         

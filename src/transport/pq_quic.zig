@@ -6,7 +6,7 @@ pub const PQQuicTransport = struct {
     allocator: std.mem.Allocator,
     quic_crypto: QuicCrypto,
     endpoint: ?Endpoint,
-    connections: std.array_list.Managed(*PQConnection), // Use ArrayList instead of HashMap
+    connections: std.ArrayList(*PQConnection), // Use ArrayList instead of HashMap
     is_server: bool,
 
     const Self = @This();
@@ -201,13 +201,13 @@ pub const PQQuicTransport = struct {
     };
 
     const Endpoint = struct {
-        address: std.net.Address,
-        socket: std.net.Stream,
+        address: std.Io.net.IpAddress,
+        socket: ?std.Io.net.Stream,
     };
 
     const PQConnection = struct {
         id: ConnectionId,
-        endpoint: std.net.Address,
+        endpoint: std.Io.net.IpAddress,
         state: ConnectionState,
         crypto_state: CryptoState,
         pq_keys: ?PQKeys,
@@ -233,7 +233,7 @@ pub const PQQuicTransport = struct {
             combined_secret: [64]u8,
         };
 
-        pub fn init(allocator: std.mem.Allocator, id: ConnectionId, endpoint: std.net.Address) !*PQConnection {
+        pub fn init(allocator: std.mem.Allocator, id: ConnectionId, endpoint: std.Io.net.IpAddress) !*PQConnection {
             const conn = try allocator.create(PQConnection);
             conn.* = PQConnection{
                 .id = id,
@@ -367,24 +367,22 @@ pub const PQQuicTransport = struct {
             .allocator = allocator,
             .quic_crypto = QuicCrypto.init(.TLS_ML_KEM_768_X25519_AES256_GCM_SHA384),
             .endpoint = null,
-            .connections = std.array_list.Managed(*PQConnection).init(allocator),
+            .connections = .{},
             .is_server = is_server,
         };
     }
 
     /// Bind to address for server
-    pub fn bind(self: *Self, address: std.net.Address) !void {
-        // Create UDP socket for QUIC
-        const socket = try std.net.tcpConnectToAddress(address);
-
+    pub fn bind(self: *Self, address: std.Io.net.IpAddress) !void {
+        // Store endpoint address (actual socket creation would require async IO)
         self.endpoint = Endpoint{
             .address = address,
-            .socket = socket,
+            .socket = null,
         };
     }
 
     /// Connect to server (client)
-    pub fn connect(self: *Self, server_address: std.net.Address) !ConnectionId {
+    pub fn connect(self: *Self, server_address: std.Io.net.IpAddress) !ConnectionId {
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const timestamp = ts.sec;
         const conn_id = @as(ConnectionId, @intCast(timestamp));
@@ -410,7 +408,7 @@ pub const PQQuicTransport = struct {
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const timestamp = ts.sec;
         const conn_id = @as(ConnectionId, @intCast(timestamp));
-        const client_addr = std.net.Address.parseIp("127.0.0.1", 0) catch unreachable;
+        const client_addr = std.Io.net.IpAddress.parse("127.0.0.1", 0) catch unreachable;
         const connection = try PQConnection.init(self.allocator, conn_id, client_addr);
 
         // Derive initial keys
@@ -543,7 +541,7 @@ pub const PQDatabaseTransport = struct {
     pub fn executeQuery(self: *Self, conn_id: u64, query: []const u8) ![]u8 {
         if (self.query_encryption) {
             // Encrypt query with additional protection
-            var encrypted_query = std.array_list.Managed(u8).init(self.transport.allocator);
+            var encrypted_query: std.ArrayList(u8) = .{};
             defer encrypted_query.deinit();
 
             try encrypted_query.appendSlice("ENCRYPTED:");
@@ -564,7 +562,7 @@ pub const PQDatabaseTransport = struct {
         return QueryStream{
             .conn_id = conn_id,
             .transport = &self.transport,
-            .buffer = std.array_list.Managed(u8).init(self.transport.allocator),
+            .buffer = .{},
         };
     }
 
@@ -577,7 +575,7 @@ pub const PQDatabaseTransport = struct {
 pub const QueryStream = struct {
     conn_id: u64,
     transport: *PQQuicTransport,
-    buffer: std.array_list.Managed(u8),
+    buffer: std.ArrayList(u8),
 
     const Self = @This();
 
@@ -612,7 +610,7 @@ test "post-quantum QUIC connection" {
     defer client.deinit();
 
     // Test connection establishment
-    const server_addr = std.net.Address.parseIp("127.0.0.1", 4433) catch unreachable;
+    const server_addr = std.Io.net.IpAddress.parse("127.0.0.1", 4433) catch unreachable;
     const client_conn_id = try client.connect(server_addr);
 
     try testing.expect(client_conn_id != 0);
@@ -627,7 +625,7 @@ test "encrypted database query over PQ-QUIC" {
     var db_transport = PQDatabaseTransport.init(allocator, false);
     defer db_transport.deinit();
 
-    const server_addr = std.net.Address.parseIp("127.0.0.1", 4433) catch unreachable;
+    const server_addr = std.Io.net.IpAddress.parse("127.0.0.1", 4433) catch unreachable;
     const conn_id = try db_transport.transport.connect(server_addr);
 
     const result = try db_transport.executeQuery(conn_id, "SELECT * FROM users WHERE id = 1");

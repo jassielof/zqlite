@@ -256,23 +256,35 @@ pub const AsyncDatabase = struct {
             
             // Use prepared statement for better performance
             // This is a simplified version - real implementation would use proper prepared statements
-            var values_str = std.ArrayList(u8).init(self.allocator);
-            defer values_str.deinit();
-            
+            var values_str: std.ArrayList(u8) = .{};
+            defer values_str.deinit(self.allocator);
+
             for (batch[0..current_batch_size], 0..) |row, i| {
-                if (i > 0) try values_str.appendSlice(", ");
-                try values_str.appendSlice("(");
+                if (i > 0) try values_str.appendSlice(self.allocator, ", ");
+                try values_str.appendSlice(self.allocator, "(");
                 for (row.values, 0..) |value, j| {
-                    if (j > 0) try values_str.appendSlice(", ");
+                    if (j > 0) try values_str.appendSlice(self.allocator, ", ");
                     switch (value) {
-                        .Integer => |int| try values_str.writer().print("{}", .{int}),
-                        .Real => |real| try values_str.writer().print("{d}", .{real}),
-                        .Text => |text| try values_str.writer().print("'{}'", .{text}),
-                        .Null => try values_str.appendSlice("NULL"),
-                        else => try values_str.appendSlice("?"),
+                        .Integer => |int| {
+                            const int_str = try std.fmt.allocPrint(self.allocator, "{}", .{int});
+                            defer self.allocator.free(int_str);
+                            try values_str.appendSlice(self.allocator, int_str);
+                        },
+                        .Real => |real| {
+                            const real_str = try std.fmt.allocPrint(self.allocator, "{d}", .{real});
+                            defer self.allocator.free(real_str);
+                            try values_str.appendSlice(self.allocator, real_str);
+                        },
+                        .Text => |text| {
+                            const text_str = try std.fmt.allocPrint(self.allocator, "'{s}'", .{text});
+                            defer self.allocator.free(text_str);
+                            try values_str.appendSlice(self.allocator, text_str);
+                        },
+                        .Null => try values_str.appendSlice(self.allocator, "NULL"),
+                        else => try values_str.appendSlice(self.allocator, "?"),
                     }
                 }
-                try values_str.appendSlice(")");
+                try values_str.appendSlice(self.allocator, ")");
             }
             
             const full_sql = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ sql, values_str.items });
@@ -351,16 +363,22 @@ pub const AsyncDatabase = struct {
     }
 };
 
+/// Get current time in milliseconds using POSIX clock
+fn getMilliTimestamp() i64 {
+    const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 /// Enhanced connection pool with health monitoring
 const ConnectionPool = struct {
     allocator: std.mem.Allocator,
-    connections: std.array_list.Managed(*connection.Connection),
-    connection_health: std.array_list.Managed(ConnectionHealth),
+    connections: std.ArrayList(*connection.Connection),
+    connection_health: std.ArrayList(ConnectionHealth),
     available: std.Thread.Semaphore,
     mutex: std.Thread.Mutex,
     health_check_interval_ms: u64,
     last_health_check: i64,
-    
+
     const ConnectionHealth = struct {
         connection: *connection.Connection,
         last_used: i64,
@@ -371,15 +389,15 @@ const ConnectionPool = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, db_path: []const u8, pool_size: u32) !Self {
-        var connections = std.array_list.Managed(*connection.Connection).init(allocator);
-        var health_info = std.array_list.Managed(ConnectionHealth).init(allocator);
-        const current_time = std.time.milliTimestamp();
+        var connections: std.ArrayList(*connection.Connection) = .{};
+        var health_info: std.ArrayList(ConnectionHealth) = .{};
+        const current_time = getMilliTimestamp();
 
         // Create connections with health monitoring
         for (0..pool_size) |_| {
             const conn = try connection.Connection.open(db_path);
-            try connections.append(conn);
-            try health_info.append(ConnectionHealth{
+            try connections.append(allocator, conn);
+            try health_info.append(allocator, ConnectionHealth{
                 .connection = conn,
                 .last_used = current_time,
                 .error_count = 0,
@@ -401,18 +419,18 @@ const ConnectionPool = struct {
     pub fn acquire(self: *Self) !*connection.Connection {
         // Perform periodic health check
         try self.performHealthCheck();
-        
+
         self.available.wait();
-        
+
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         // Find a healthy connection
         var conn_index: ?usize = null;
         for (self.connection_health.items, 0..) |*health, i| {
             if (health.is_healthy) {
                 conn_index = i;
-                health.last_used = std.time.milliTimestamp();
+                health.last_used = getMilliTimestamp();
                 break;
             }
         }
@@ -439,17 +457,17 @@ const ConnectionPool = struct {
     pub fn release(self: *Self, conn: *connection.Connection) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         // Update connection health on release
-        const current_time = std.time.milliTimestamp();
-        self.connections.append(conn) catch {};
-        self.connection_health.append(ConnectionHealth{
+        const current_time = getMilliTimestamp();
+        self.connections.append(self.allocator, conn) catch {};
+        self.connection_health.append(self.allocator, ConnectionHealth{
             .connection = conn,
             .last_used = current_time,
             .error_count = 0,
             .is_healthy = true,
         }) catch {};
-        
+
         self.available.post();
     }
     
@@ -471,17 +489,17 @@ const ConnectionPool = struct {
     
     /// Perform health check on connections
     fn performHealthCheck(self: *Self) !void {
-        const current_time = std.time.milliTimestamp();
-        
+        const current_time = getMilliTimestamp();
+
         self.mutex.lock();
         defer self.mutex.unlock();
-        
-        if (current_time - self.last_health_check < self.health_check_interval_ms) {
+
+        if (current_time - self.last_health_check < @as(i64, @intCast(self.health_check_interval_ms))) {
             return;
         }
-        
+
         self.last_health_check = current_time;
-        
+
         // Check each connection's health
         for (self.connection_health.items) |*health| {
             if (!health.is_healthy) {
@@ -511,8 +529,8 @@ const ConnectionPool = struct {
         for (self.connections.items) |conn| {
             conn.close();
         }
-        self.connections.deinit();
-        self.connection_health.deinit();
+        self.connections.deinit(self.allocator);
+        self.connection_health.deinit(self.allocator);
     }
 };
 

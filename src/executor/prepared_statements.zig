@@ -204,7 +204,8 @@ pub const PreparedStatement = struct {
     /// Create execution plan for optimization
     fn createExecutionPlan(self: *Self) !*ExecutionPlan {
         const plan = try self.allocator.create(ExecutionPlan);
-        plan.steps = std.ArrayList(ExecutionStep).init(self.allocator);
+        plan.allocator = self.allocator;
+        plan.steps = .{};
         
         switch (self.statement) {
             .Select => |select| {
@@ -212,53 +213,53 @@ pub const PreparedStatement = struct {
             },
             else => {
                 // For non-SELECT statements, create a simple plan
-                try plan.steps.append(ExecutionStep{ .DirectExecution = {} });
+                try plan.steps.append(plan.allocator, ExecutionStep{ .DirectExecution = {} });
             },
         }
-        
+
         return plan;
     }
-    
+
     /// Build execution plan for SELECT statement
     fn buildSelectPlan(self: *Self, plan: *ExecutionPlan, select: ast.SelectStatement) !void {
         _ = self;
         // Step 1: Table scan or index lookup
         if (select.table) |table| {
-            try plan.steps.append(ExecutionStep{ .TableScan = .{ .table_name = table } });
+            try plan.steps.append(plan.allocator, ExecutionStep{ .TableScan = .{ .table_name = table } });
         }
-        
+
         // Step 2: Apply WHERE clause
         if (select.where_clause) |_| {
-            try plan.steps.append(ExecutionStep{ .Filter = {} });
+            try plan.steps.append(plan.allocator, ExecutionStep{ .Filter = {} });
         }
-        
+
         // Step 3: Apply JOINs
         for (select.joins) |_| {
-            try plan.steps.append(ExecutionStep{ .Join = {} });
+            try plan.steps.append(plan.allocator, ExecutionStep{ .Join = {} });
         }
-        
+
         // Step 4: GROUP BY
         if (select.group_by) |_| {
-            try plan.steps.append(ExecutionStep{ .GroupBy = {} });
+            try plan.steps.append(plan.allocator, ExecutionStep{ .GroupBy = {} });
         }
-        
+
         // Step 5: HAVING
         if (select.having) |_| {
-            try plan.steps.append(ExecutionStep{ .Having = {} });
+            try plan.steps.append(plan.allocator, ExecutionStep{ .Having = {} });
         }
-        
+
         // Step 6: ORDER BY
         if (select.order_by) |_| {
-            try plan.steps.append(ExecutionStep{ .OrderBy = {} });
+            try plan.steps.append(plan.allocator, ExecutionStep{ .OrderBy = {} });
         }
-        
+
         // Step 7: LIMIT/OFFSET
         if (select.limit != null or select.offset != null) {
-            try plan.steps.append(ExecutionStep{ .Limit = {} });
+            try plan.steps.append(plan.allocator, ExecutionStep{ .Limit = {} });
         }
-        
+
         // Step 8: Projection (select columns)
-        try plan.steps.append(ExecutionStep{ .Projection = {} });
+        try plan.steps.append(plan.allocator, ExecutionStep{ .Projection = {} });
     }
     
     /// Execute statement using execution plan
@@ -382,11 +383,12 @@ pub const ParameterType = enum {
 
 /// Execution plan for optimized query execution
 pub const ExecutionPlan = struct {
+    allocator: std.mem.Allocator,
     steps: std.ArrayList(ExecutionStep),
-    
+
     pub fn deinit(self: *ExecutionPlan, allocator: std.mem.Allocator) void {
-        self.steps.deinit();
         _ = allocator;
+        self.steps.deinit(self.allocator);
     }
 };
 

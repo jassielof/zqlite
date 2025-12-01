@@ -56,9 +56,9 @@ pub const BTree = struct {
 
     /// Select all rows (for table scans)
     pub fn selectAll(self: *Self, allocator: std.mem.Allocator) ![]storage.Row {
-        var results = std.array_list.Managed(storage.Row).init(allocator);
-        try self.collectAllLeafValues(self.root_page, &results);
-        return results.toOwnedSlice();
+        var results: std.ArrayList(storage.Row) = .{};
+        try self.collectAllLeafValues(self.root_page, &results, allocator);
+        return results.toOwnedSlice(allocator);
     }
 
     /// Insert into a non-full node
@@ -182,7 +182,7 @@ pub const BTree = struct {
     }
 
     /// Collect all values from leaf nodes (for table scans)
-    fn collectAllLeafValues(self: *Self, page_id: u32, results: *std.array_list.Managed(storage.Row)) !void {
+    fn collectAllLeafValues(self: *Self, page_id: u32, results: *std.ArrayList(storage.Row), allocator: std.mem.Allocator) !void {
         var node = try self.readNode(page_id);
         defer node.deinit(self.allocator);
 
@@ -245,12 +245,12 @@ pub const BTree = struct {
                     };
                 }
 
-                try results.append(storage.Row{ .values = cloned_values });
+                try results.append(allocator, storage.Row{ .values = cloned_values });
             }
         } else {
             // Recursively collect from all children
             for (0..node.key_count + 1) |i| {
-                try self.collectAllLeafValues(node.children[i], results);
+                try self.collectAllLeafValues(node.children[i], results, allocator);
             }
         }
     }
@@ -272,7 +272,7 @@ pub const BTree = struct {
     }
 
     /// Collect values that match (or don't match) a predicate
-    fn collectMatchingLeafValues(self: *Self, node: *Node, results: *std.array_list.Managed(storage.Row), allocator: std.mem.Allocator, predicate: fn (*const storage.Row) bool, should_match: bool) !void {
+    fn collectMatchingLeafValues(self: *Self, node: *Node, results: *std.ArrayList(storage.Row), allocator: std.mem.Allocator, predicate: fn (*const storage.Row) bool, should_match: bool) !void {
         if (node.is_leaf) {
             for (node.values[0..node.key_count]) |value| {
                 const matches = predicate(&value);
@@ -288,7 +288,7 @@ pub const BTree = struct {
                             .Null => storage.Value.Null,
                         };
                     }
-                    try results.append(storage.Row{ .values = cloned_values });
+                    try results.append(allocator, storage.Row{ .values = cloned_values });
                 }
             }
         } else {

@@ -1,26 +1,32 @@
 const std = @import("std");
 const storage = @import("../db/storage.zig");
 
+/// Get current time in milliseconds using POSIX clock
+fn getMilliTimestamp() i64 {
+    const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 /// Enhanced error reporting system for zqlite v1.2.5
 /// Provides detailed error context, stack traces, and recovery suggestions
 pub const EnhancedErrorReporting = struct {
     allocator: std.mem.Allocator,
     error_history: std.ArrayList(ErrorReport),
     max_history_size: usize,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, max_history_size: usize) Self {
         return Self{
             .allocator = allocator,
-            .error_history = std.ArrayList(ErrorReport){},
+            .error_history = .{},
             .max_history_size = max_history_size,
         };
     }
-    
+
     /// Report an error with enhanced context
     pub fn reportError(self: *Self, error_type: ErrorType, context: ErrorContext) !ErrorReport {
-        const timestamp = std.time.milliTimestamp();
+        const timestamp = getMilliTimestamp();
         const stack_trace = try self.captureStackTrace();
         
         const report = ErrorReport{
@@ -148,7 +154,7 @@ pub const EnhancedErrorReporting = struct {
     
     /// Get error statistics
     pub fn getErrorStats(self: *Self, time_window_ms: i64) ErrorStats {
-        const current_time = std.time.milliTimestamp();
+        const current_time = getMilliTimestamp();
         const cutoff_time = current_time - time_window_ms;
         
         var stats = ErrorStats{};
@@ -183,7 +189,7 @@ pub const EnhancedErrorReporting = struct {
     
     /// Clear old errors from history
     pub fn clearOldErrors(self: *Self, max_age_ms: i64) !void {
-        const current_time = std.time.milliTimestamp();
+        const current_time = getMilliTimestamp();
         const cutoff_time = current_time - max_age_ms;
         
         var new_history = std.ArrayList(ErrorReport){};
@@ -218,7 +224,7 @@ pub const EnhancedErrorReporting = struct {
     
     fn generateErrorId(self: *Self) u64 {
         _ = self; // Remove unused variable warning
-        const timestamp = @as(u64, @intCast(std.time.milliTimestamp()));
+        const timestamp = @as(u64, @intCast(getMilliTimestamp()));
         const random = std.crypto.random.int(u32);
         return (timestamp << 32) | random;
     }

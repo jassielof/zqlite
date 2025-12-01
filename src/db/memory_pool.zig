@@ -192,13 +192,13 @@ pub const MemoryPool = struct {
     
     /// Cleanup unused pools (remove pools with no active allocations)
     pub fn cleanup(self: *Self) void {
-        var to_remove = std.array_list.Managed(usize).init(self.allocator);
-        defer to_remove.deinit();
-        
+        var to_remove: std.ArrayList(usize) = .{};
+        defer to_remove.deinit(self.allocator);
+
         var pool_iter = self.pools.iterator();
         while (pool_iter.next()) |entry| {
             if (entry.value_ptr.active_count == 0) {
-                to_remove.append(entry.key_ptr.*) catch continue;
+                to_remove.append(self.allocator, entry.key_ptr.*) catch continue;
             }
         }
         

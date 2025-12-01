@@ -33,7 +33,7 @@ pub const ClusterManager = struct {
             .status = .Healthy,
             .last_seen = timestamp,
             .load_factor = 0.0,
-            .allocated_shards = std.array_list.Managed(u32).init(allocator),
+            .allocated_shards = .{},
         };
         
         return Self{
@@ -63,7 +63,7 @@ pub const ClusterManager = struct {
             .status = .Healthy,
             .last_seen = timestamp,
             .load_factor = 0.0,
-            .allocated_shards = std.array_list.Managed(u32).init(self.allocator),
+            .allocated_shards = .{},
         };
         
         try self.nodes.put(node.id, node);
@@ -90,9 +90,9 @@ pub const ClusterManager = struct {
             // Clean up node
             self.allocator.free(node.id);
             self.allocator.free(node.address);
-            node.allocated_shards.deinit();
+            node.allocated_shards.deinit(self.allocator);
             self.allocator.destroy(node);
-            
+
             _ = self.nodes.remove(node_id);
             
             self.metrics.nodes_removed += 1;
@@ -109,13 +109,13 @@ pub const ClusterManager = struct {
         const target_nodes = try self.determineTargetNodes(query);
         defer self.allocator.free(target_nodes);
 
-        var results = std.array_list.Managed(QueryResult).init(self.allocator);
-        defer results.deinit();
+        var results: std.ArrayList(QueryResult) = .{};
+        defer results.deinit(self.allocator);
 
         // Execute query on target nodes
         for (target_nodes) |node| {
             const result = try self.executeQueryOnNode(node, query);
-            try results.append(result);
+            try results.append(self.allocator, result);
         }
 
         // Merge results
@@ -217,19 +217,19 @@ pub const ClusterManager = struct {
         const shards_to_redistribute = node.allocated_shards.items;
         
         // Find healthy nodes to take over shards
-        var available_nodes = std.array_list.Managed(*Node).init(self.allocator);
-        defer available_nodes.deinit();
-        
+        var available_nodes: std.ArrayList(*Node) = .{};
+        defer available_nodes.deinit(self.allocator);
+
         var node_iterator = self.nodes.iterator();
         while (node_iterator.next()) |entry| {
             const candidate = entry.value_ptr.*;
             if (candidate.status == .Healthy and candidate != node) {
-                try available_nodes.append(candidate);
+                try available_nodes.append(self.allocator, candidate);
             }
         }
-        
+
         if (self.local_node.status == .Healthy) {
-            try available_nodes.append(self.local_node);
+            try available_nodes.append(self.allocator, self.local_node);
         }
         
         // Redistribute shards
@@ -262,15 +262,15 @@ pub const ClusterManager = struct {
     
     /// Get nodes for admin query
     fn getAdminNodes(self: *Self) ![]const *Node {
-        var nodes = std.array_list.Managed(*Node).init(self.allocator);
-        
+        var nodes: std.ArrayList(*Node) = .{};
+
         var node_iterator = self.nodes.iterator();
         while (node_iterator.next()) |entry| {
-            try nodes.append(entry.value_ptr.*);
+            try nodes.append(self.allocator, entry.value_ptr.*);
         }
-        
-        try nodes.append(self.local_node);
-        return try nodes.toOwnedSlice();
+
+        try nodes.append(self.allocator, self.local_node);
+        return try nodes.toOwnedSlice(self.allocator);
     }
     
     /// Execute query on specific node
@@ -315,12 +315,12 @@ pub const ClusterManager = struct {
     
     /// Select nodes for removal during scale down
     fn selectNodesForRemoval(self: *Self, count: u32) ![]const *Node {
-        var candidates = std.array_list.Managed(*Node).init(self.allocator);
-        defer candidates.deinit();
-        
+        var candidates: std.ArrayList(*Node) = .{};
+        defer candidates.deinit(self.allocator);
+
         var node_iterator = self.nodes.iterator();
         while (node_iterator.next()) |entry| {
-            try candidates.append(entry.value_ptr.*);
+            try candidates.append(self.allocator, entry.value_ptr.*);
         }
         
         // Sort by load factor (ascending - remove least loaded first)
@@ -343,7 +343,7 @@ pub const ClusterManager = struct {
         // Clean up local node
         self.allocator.free(self.local_node.id);
         self.allocator.free(self.local_node.address);
-        self.local_node.allocated_shards.deinit();
+        self.local_node.allocated_shards.deinit(self.allocator);
         self.allocator.destroy(self.local_node);
         
         // Clean up other nodes
@@ -352,7 +352,7 @@ pub const ClusterManager = struct {
             const node = entry.value_ptr.*;
             self.allocator.free(node.id);
             self.allocator.free(node.address);
-            node.allocated_shards.deinit();
+            node.allocated_shards.deinit(self.allocator);
             self.allocator.destroy(node);
         }
         
@@ -374,7 +374,7 @@ pub const Node = struct {
     status: NodeStatus,
     last_seen: i64,
     load_factor: f64,
-    allocated_shards: std.array_list.Managed(u32),
+    allocated_shards: std.ArrayList(u32),
 };
 
 /// Node status
@@ -388,21 +388,21 @@ pub const NodeStatus = enum {
 /// Load balancer
 const LoadBalancer = struct {
     allocator: std.mem.Allocator,
-    nodes: std.array_list.Managed(*Node),
+    nodes: std.ArrayList(*Node),
     round_robin_index: u32,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .allocator = allocator,
-            .nodes = std.array_list.Managed(*Node).init(allocator),
+            .nodes = .{},
             .round_robin_index = 0,
         };
     }
-    
+
     pub fn addNode(self: *Self, node: *Node) !void {
-        try self.nodes.append(node);
+        try self.nodes.append(self.allocator, node);
     }
     
     pub fn removeNode(self: *Self, node: *Node) void {
@@ -424,28 +424,28 @@ const LoadBalancer = struct {
     }
     
     pub fn deinit(self: *Self) void {
-        self.nodes.deinit();
+        self.nodes.deinit(self.allocator);
     }
 };
 
 /// Health monitor
 const HealthMonitor = struct {
     allocator: std.mem.Allocator,
-    nodes: std.array_list.Managed(*Node),
+    nodes: std.ArrayList(*Node),
     health_check_interval_ms: u64,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .allocator = allocator,
-            .nodes = std.array_list.Managed(*Node).init(allocator),
+            .nodes = .{},
             .health_check_interval_ms = 5000,
         };
     }
-    
+
     pub fn addNode(self: *Self, node: *Node) !void {
-        try self.nodes.append(node);
+        try self.nodes.append(self.allocator, node);
     }
     
     pub fn removeNode(self: *Self, node: *Node) void {
@@ -484,7 +484,7 @@ const HealthMonitor = struct {
     }
     
     pub fn deinit(self: *Self) void {
-        self.nodes.deinit();
+        self.nodes.deinit(self.allocator);
     }
 };
 
@@ -537,13 +537,12 @@ const ShardManager = struct {
         node.allocated_shards.clearRetainingCapacity();
         
         for (0..shard_count) |i| {
-            try node.allocated_shards.append(@intCast(i));
+            try node.allocated_shards.append(self.allocator, @intCast(i));
         }
     }
-    
+
     pub fn reassignShard(self: *Self, shard_id: u32, new_node: *Node) !void {
-        _ = self;
-        try new_node.allocated_shards.append(shard_id);
+        try new_node.allocated_shards.append(self.allocator, shard_id);
     }
     
     pub fn getNodesForShard(self: *Self, shard_id: u32) ![]const *Node {
