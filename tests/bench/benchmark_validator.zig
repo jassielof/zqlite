@@ -3,7 +3,6 @@ const zqlite = @import("zqlite");
 
 /// Benchmark validator for CI regression detection
 /// Runs benchmarks and validates against baseline thresholds
-
 const BenchResult = struct {
     name: []const u8,
     ops_per_sec: f64,

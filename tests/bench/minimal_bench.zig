@@ -26,7 +26,7 @@ pub fn main() !void {
 
     std.debug.print("Inserting 5000 rows (this would previously fail)...\n", .{});
     const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+    const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     var i: usize = 0;
     while (i < 5000) : (i += 1) {
         try conn.execute("INSERT INTO test (id, value) VALUES (1, 'test')");

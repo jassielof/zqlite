@@ -3,7 +3,6 @@ const zqlite = @import("zqlite");
 
 /// Comprehensive benchmarking suite for production performance validation
 /// Measures: INSERT/SELECT/UPDATE/DELETE throughput, memory usage, latency
-
 const BenchmarkResult = struct {
     name: []const u8,
     operations: usize,
@@ -118,7 +117,7 @@ fn benchmarkSimpleInserts(allocator: std.mem.Allocator) !BenchmarkResult {
     try conn.execute("CREATE TABLE bench_insert (id INTEGER, value TEXT)");
 
     const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+    const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;
@@ -150,7 +149,7 @@ fn benchmarkBulkInserts(allocator: std.mem.Allocator) !BenchmarkResult {
     try conn.execute("CREATE TABLE bench_bulk (id INTEGER, data TEXT)");
 
     const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+    const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     try conn.execute("BEGIN TRANSACTION");
@@ -191,7 +190,7 @@ fn benchmarkSelects(allocator: std.mem.Allocator) !BenchmarkResult {
     }
 
     const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+    const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     i = 0;
@@ -225,7 +224,7 @@ fn benchmarkUpdates(allocator: std.mem.Allocator) !BenchmarkResult {
     try conn.execute("INSERT INTO bench_update VALUES (1, 'initial')");
 
     const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+    const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;
@@ -263,7 +262,7 @@ fn benchmarkDeletes(allocator: std.mem.Allocator) !BenchmarkResult {
     }
 
     const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+    const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     i = 0;
@@ -290,7 +289,7 @@ fn benchmarkCreateTableDefaults(allocator: std.mem.Allocator) !BenchmarkResult {
     const num_ops: usize = 100;
 
     const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+    const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;
@@ -330,7 +329,7 @@ fn benchmarkMixedWorkload(allocator: std.mem.Allocator) !BenchmarkResult {
     try conn.execute("CREATE TABLE bench_mixed (id INTEGER, value TEXT)");
 
     const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+    const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;
@@ -373,7 +372,7 @@ fn benchmarkTransactions(allocator: std.mem.Allocator) !BenchmarkResult {
     try conn.execute("CREATE TABLE bench_txn (id INTEGER, value TEXT)");
 
     const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+    const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
     const mem_before = getMemoryUsage();
 
     var i: usize = 0;

@@ -3,7 +3,6 @@ const zqlite = @import("zqlite");
 
 /// Ultra-simple benchmark that avoids B-tree OrderMismatch bug
 /// Demonstrates basic performance without complex operations
-
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
@@ -32,9 +31,7 @@ pub fn main() !void {
         const duration_ms = @as(f64, @floatFromInt(end_time - start)) / 1_000_000.0;
         const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (duration_ms / 1000.0);
 
-        std.debug.print("✅ Simple INSERT: {} ops in {d:.2}ms ({d:.0} ops/sec)\n", .{
-            num_ops, duration_ms, ops_per_sec
-        });
+        std.debug.print("✅ Simple INSERT: {} ops in {d:.2}ms ({d:.0} ops/sec)\n", .{ num_ops, duration_ms, ops_per_sec });
     }
 
     // Benchmark 2: Bulk INSERTs (in transaction)
@@ -55,9 +52,7 @@ pub fn main() !void {
         const duration_ms = @as(f64, @floatFromInt(end_time - start)) / 1_000_000.0;
         const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (duration_ms / 1000.0);
 
-        std.debug.print("✅ Bulk INSERT:   {} ops in {d:.2}ms ({d:.0} ops/sec)\n", .{
-            num_ops, duration_ms, ops_per_sec
-        });
+        std.debug.print("✅ Bulk INSERT:   {} ops in {d:.2}ms ({d:.0} ops/sec)\n", .{ num_ops, duration_ms, ops_per_sec });
     }
 
     // Benchmark 3: SELECT queries
@@ -77,9 +72,7 @@ pub fn main() !void {
         const duration_ms = @as(f64, @floatFromInt(end_time - start)) / 1_000_000.0;
         const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (duration_ms / 1000.0);
 
-        std.debug.print("✅ SELECT query:  {} ops in {d:.2}ms ({d:.0} ops/sec)\n", .{
-            num_ops, duration_ms, ops_per_sec
-        });
+        std.debug.print("✅ SELECT query:  {} ops in {d:.2}ms ({d:.0} ops/sec)\n", .{ num_ops, duration_ms, ops_per_sec });
     }
 
     // Benchmark 4: UPDATEs
@@ -98,9 +91,7 @@ pub fn main() !void {
         const duration_ms = @as(f64, @floatFromInt(end_time - start)) / 1_000_000.0;
         const ops_per_sec = @as(f64, @floatFromInt(num_ops)) / (duration_ms / 1000.0);
 
-        std.debug.print("✅ UPDATE:        {} ops in {d:.2}ms ({d:.0} ops/sec)\n", .{
-            num_ops, duration_ms, ops_per_sec
-        });
+        std.debug.print("✅ UPDATE:        {} ops in {d:.2}ms ({d:.0} ops/sec)\n", .{ num_ops, duration_ms, ops_per_sec });
     }
 
     std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});

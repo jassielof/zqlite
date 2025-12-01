@@ -36,7 +36,7 @@ pub fn main() !void {
         try stmt.bind(0, 1);
         try stmt.bind(1, "Alice");
         try stmt.bind(2, 25);
-        
+
         std.debug.print("   ✅ Simplified parameter binding works\n", .{});
     }
 
@@ -61,12 +61,7 @@ pub fn main() !void {
     // Test 4: Migration system (structure only)
     std.debug.print("4️⃣ Testing migration system structure...\n", .{});
     {
-        const migration = zqlite.migration.createMigration(
-            1,
-            "test_migration",
-            "CREATE TABLE test (id INTEGER)",
-            "DROP TABLE test"
-        );
+        const migration = zqlite.migration.createMigration(1, "test_migration", "CREATE TABLE test (id INTEGER)", "DROP TABLE test");
 
         if (migration.version == 1) {
             std.debug.print("   ✅ Migration system structure works\n", .{});

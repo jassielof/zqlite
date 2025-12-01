@@ -9,7 +9,6 @@ const parser = @import("zqlite").parser;
 /// - Infinite loops
 /// - Assertion failures
 /// - Edge cases in SQL syntax handling
-
 const FuzzConfig = struct {
     seed: u64,
     iterations: usize,
