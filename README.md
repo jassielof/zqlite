@@ -4,7 +4,7 @@
 
 # zqlite 🚀🔐
 
-![Zig](https://img.shields.io/badge/zig-0.15.0+-f7a41d?style=flat-square)
+![Zig](https://img.shields.io/badge/zig-0.16.0--dev-f7a41d?style=flat-square)
 ![Status](https://img.shields.io/badge/status-production--ready-green?style=flat-square)
 ![Crypto](https://img.shields.io/badge/crypto-post--quantum-blueviolet?style=flat-square)
 ![ZKP](https://img.shields.io/badge/ZKP-bulletproofs-orange?style=flat-square)

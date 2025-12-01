@@ -1,4 +1,4 @@
-name: CI
+name: ZQLite CI Pipeline
 
 on:
   push:
@@ -6,36 +6,137 @@ on:
   pull_request:
     branches: [ main ]
 
-jobs:
-  build:
-    runs-on: self-hosted
+env:
+  ZIG_VERSION: 0.16.0-dev.1484+d0ba6642b
 
+jobs:
+  lint:
+    name: "Lint & Format"
+    runs-on: self-hosted
+    timeout-minutes: 10
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Zig (latest dev)
-        run: |
-          set -eux
-          JSON=$(curl -sL https://ziglang.org/download/index.json)
-          ZIG_URL=$(echo "$JSON" | jq -r '.master."x86_64-linux".tarball')
-          curl -LO "$ZIG_URL"
-          TARBALL=$(basename "$ZIG_URL")
-          tar -xf "$TARBALL"
-          ZIG_DIR=$(tar -tf "$TARBALL" | head -1 | cut -f1 -d"/")
-          echo "$PWD/$ZIG_DIR" >> $GITHUB_PATH
+      - name: Cache zig artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
 
-      - name: Build with Zig
+      - name: Verify Zig toolchain
+        run: |
+          set -euo pipefail
+          INSTALLED=$(zig version)
+          echo "Using Zig ${INSTALLED}"
+          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
+            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
+            exit 1
+          fi
+
+      - name: Format check
+        run: |
+          set -euo pipefail
+          zig fmt --check src/
+          zig fmt --check examples/
+          if [ -d tests ]; then
+            zig fmt --check tests/
+          fi
+
+  build-test:
+    name: "Build & Unit Tests"
+    runs-on: self-hosted
+    timeout-minutes: 20
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache zig artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
+
+      - name: Verify Zig toolchain
+        run: |
+          set -euo pipefail
+          INSTALLED=$(zig version)
+          echo "Using Zig ${INSTALLED}"
+          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
+            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
+            exit 1
+          fi
+
+      - name: Build
         run: zig build
 
-      - name: Run Zig tests
+      - name: Run unit tests
         run: zig build test
 
-      - name: Run CREATE TABLE memory leak detection
+  memory-tests:
+    name: "Memory Leak Detection"
+    runs-on: self-hosted
+    timeout-minutes: 15
+    needs: build-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache zig artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
+
+      - name: Verify Zig toolchain
+        run: |
+          set -euo pipefail
+          INSTALLED=$(zig version)
+          echo "Using Zig ${INSTALLED}"
+          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
+            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
+            exit 1
+          fi
+
+      - name: CREATE TABLE memory leak detection
         run: zig build test-create-table-leaks
 
-      - name: Run comprehensive tests
+      - name: Comprehensive memory tests
         run: zig build test-comprehensive
+
+  benchmarks:
+    name: "Benchmark Validation"
+    runs-on: self-hosted
+    timeout-minutes: 10
+    needs: build-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache zig artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
+
+      - name: Verify Zig toolchain
+        run: |
+          set -euo pipefail
+          INSTALLED=$(zig version)
+          echo "Using Zig ${INSTALLED}"
+          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
+            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
+            exit 1
+          fi
 
       - name: Validate benchmark performance
         run: zig build bench-validate

@@ -1,8 +1,10 @@
-/.zig-cache/
-/zig-out/
+# Zig build artifacts
+.zig-cache/
+zig-out/
 
 # Compiled binaries
 *.o
+*.a
 *.exe
 *.dll
 *.so
@@ -13,6 +15,8 @@
 *.db-wal
 *.db-shm
 *.wal
+:memory:
+:memory:.wal
 
 # Logs
 *.log
@@ -31,6 +35,7 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+temp_test/
 *.tmp
 
 # Coverage and profiling
@@ -42,6 +47,9 @@ coverage/
 *.bak
 *.backup
 
-CLAUDE.md
-TODO.md
+# Archive (reference implementations)
 archive/
+
+# Claude context
+.claude/
+CLAUDE.md

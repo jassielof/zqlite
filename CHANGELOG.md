@@ -1,203 +1,102 @@
-# ZQLite Changelog
+# Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to ZQLite will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2025-12-01
 
-## [0.3.0] - 2025-06-23 - "Next-Generation Database"
-
-### Added
-
-  1. Fixed TokioZ import issues - All dependencies properly configured
-  2. Complete SQL execution engine - Full CRUD operations working
-  3. Async database operations - Real SQL parsing and execution
-  4. Post-quantum QUIC transport - Proper key derivation and network communication
-  5. MVCC transactions - Working transaction isolation and concurrency
-  6. Secure storage encryption - Production-grade AES-256-GCM encryption
-  7. Comprehensive error handling - Graceful error recovery throughout
-  8. Production tests - Full test suite for all components
-
-## [0.3.0] - 2025-06-23 - "Next-Generation Database"
-
-### Added
-- **Advanced Indexing System**
-  - B-tree indexes for efficient range queries and sorted access
-  - Hash indexes for O(1) exact lookups
-  - Unique constraint indexes with violation detection
-  - Multi-column composite indexes with optimized key handling
-  - Composite key optimization with hash caching for performance
-  - Prefix matching support for multi-dimensional queries
-  - AdvancedIndexManager for coordinating all index types
-
-- **Cryptographic Engine** (`src/crypto/secure_storage.zig`)
-  - AES-256-GCM encryption for data at rest
-  - ChaCha20-Poly1305 stream encryption
-  - BLAKE3 hashing with salt support
-  - Ed25519 digital signatures
-  - Argon2id password hashing with configurable parameters
-  - Secure random key generation
-  - Cryptographic value storage with integrity verification
-
-- **Asynchronous Operations** (`src/concurrent/async_operations.zig`)
-  - Async database operations using Zig's async/await
-  - Connection pooling for high-performance concurrent access
-  - Background task processing
-  - High-performance caching system with LRU eviction
-  - Thread-safe async coordinator
-  - Batch operation support for improved throughput
-
-- **Enhanced Thread Safety** (`src/concurrent/thread_safety.zig`)
-  - Thread-safe wrappers for all database operations
-  - Reader-writer locks for optimal concurrent access
-  - Atomic operations for counters and flags
-  - Safe concurrent transaction handling
-
-- **JSON Support** (`src/json/json_support.zig`)
-  - Native JSON data type support
-  - JSON path queries and extraction
-  - JSON validation and parsing
-  - Integration with storage system
-
-- **C API / FFI** (`src/ffi/c_api.zig`)
-  - Complete C-compatible API for external language integration
-  - Memory-safe C bindings
-  - Support for Rust, Python, and other language integrations
-  - Error handling compatible with C conventions
-
-- **Comprehensive Examples**
-  - `examples/nextgen_database.zig`: Showcase of async, crypto, and indexing features
-  - `examples/advanced_indexing_demo.zig`: Detailed indexing system demonstration
-  - AI/ML application scenarios with vector similarity search
-  - User behavior analytics examples
-  - Real-time event processing demonstrations
-
-### Enhanced
-- **Core Database Engine**
-  - Improved B-tree implementation with better balancing
-  - Enhanced WAL (Write-Ahead Logging) with integrity checks
-  - Optimized storage layer with compression support
-  - Better memory management and allocation strategies
-
-- **SQL Parser and Executor**
-  - Extended SQL syntax support
-  - Improved query planning and optimization
-  - Better error reporting and diagnostics
-  - Enhanced type system with JSON support
-
-- **Build System**
-  - Updated to Zig 0.15.0-dev compatibility
-  - Modular build configuration
-  - Optional dependency management
-  - Comprehensive testing framework
-
-### Security
-- **Cryptographic Protection**
-  - End-to-end encryption for sensitive data
-  - Secure key derivation and storage
-  - Protection against timing attacks
-  - Memory-safe cryptographic operations
-
-- **Access Control**
-  - Thread-safe concurrent access patterns
-  - Atomic operations for critical sections
-  - Protected memory regions for sensitive data
-
-### Performance
-- **Indexing Optimizations**
-  - O(1) hash index lookups
-  - O(log n) B-tree range queries
-  - Cached composite key hashing
-  - Optimized multi-column index storage
-
-- **Async Operations**
-  - Non-blocking I/O operations
-  - Connection pooling reduces overhead
-  - Batch processing for bulk operations
-  - High-performance caching layer
-
-- **Memory Management**
-  - Optimized allocator usage
-  - Reduced memory fragmentation
-  - Smart pointer management
-  - Efficient data structure layouts
-
-### Use Cases
-- **AI/ML Applications**
-  - Vector embedding storage and similarity search
-  - Feature store for machine learning models
-  - Real-time analytics and data processing
-  - High-performance data pipelines
-
-- **VPN and Networking**
-  - Secure connection metadata storage
-  - DNS record management with crypto verification
-  - Network topology and routing information
-  - Encrypted session management
-
-- **Cryptographic Applications**
-  - Secure document storage
-  - Blockchain and cryptocurrency data
-  - Digital signature verification
-  - Key management and rotation
-
-- **Enterprise Applications**
-  - High-concurrency web applications
-  - Real-time analytics dashboards
-  - IoT data collection and processing
-  - Financial transaction processing
-
-### Developer Experience
-- **Documentation**
-  - Comprehensive API documentation
-  - Real-world usage examples
-  - Integration guides for different platforms
-  - Performance tuning recommendations
-
-- **Testing**
-  - Unit tests for all major components
-  - Integration tests for full workflows
-  - Performance benchmarks
-  - Memory leak detection
-
-- **Tooling**
-  - Command-line interface improvements
-  - Better error messages and debugging
-  - Development utilities and helpers
-  - Profiling and monitoring support
-
-### Breaking Changes
-- Updated minimum Zig version to 0.13.0+
-- Some internal APIs have been restructured for better performance
-- Legacy index manager replaced with AdvancedIndexManager (backwards compatible alias provided)
-
-### Migration Guide
-- Existing databases are fully compatible
-- Old indexing code will continue to work with legacy aliases
-- New features are opt-in and don't affect existing functionality
-- Cryptographic features require explicit initialization
-
----
-
-## [0.2.0] - Previous Release
-### Added
-- Basic SQL operations (CREATE, INSERT, SELECT, UPDATE, DELETE)
-- B-tree storage engine
-- WAL (Write-Ahead Logging) support
-- DNS and PowerDNS integration examples
-- Command-line interface
+### Changed
+- Pinned CI to Zig `0.16.0-dev.1484+d0ba6642b` for reproducible builds
+- Reorganized project structure: moved test files to `tests/standalone/`
+- Cleaned up root directory (removed build artifacts, temp files)
+- Updated `.gitignore` to prevent future cruft accumulation
 
 ### Fixed
-- Memory management improvements
-- Parser error handling
-- Storage consistency issues
+- Version mismatch between `build.zig.zon` and `src/version.zig`
 
----
+## [1.3.4] - 2025-10-03
 
-## [0.1.0] - Initial Release
+### Fixed
+- **Critical B-tree OrderMismatch bug** - Now supports large datasets
+  - Fixed missing `writeNode()` after `splitChild()`
+  - Fixed array bounds checking in child index calculation
+  - Validated with 5,000 row insertions (2,064 ops/sec)
+
+## [1.3.3] - 2025-10-03
+
+### Fixed
+- Memory leaks in `planner.zig` (DEFAULT constraint handling)
+- Double-free errors in `vm.zig` (`cloneStorageDefaultValue`)
+
 ### Added
-- Basic embedded SQL database functionality
+- Memory leak detection in CI using `GeneralPurposeAllocator`
+- Fuzzing infrastructure for SQL parser
+- Fuzzing infrastructure for VM execution
+- Structured logging system
+- Comprehensive benchmarking suite
+- Benchmark regression detection in CI
+
+## [1.0.0] - 2025-09-01
+
+### Added
+- **Core SQL Engine**
+  - Full CRUD operations: CREATE, INSERT, SELECT, UPDATE, DELETE
+  - B-tree storage engine with Write-Ahead Logging (WAL)
+  - SQL parser with AST generation
+  - Query planner and VM executor
+  - Prepared statements support
+
+- **Advanced Indexing**
+  - B-tree indexes for range queries
+  - Hash indexes for O(1) lookups
+  - Unique constraint indexes
+  - Multi-column composite indexes
+
+- **Post-Quantum Cryptography** (optional)
+  - ML-KEM-768 key encapsulation
+  - ML-DSA-65 digital signatures
+  - Hybrid classical + post-quantum modes
+  - Field-level encryption (ChaCha20-Poly1305)
+
+- **Concurrency**
+  - MVCC transaction isolation
+  - Connection pooling
+  - Thread-safe operations
+  - Async database operations
+
+- **Additional Features**
+  - JSON data type support
+  - C API / FFI for language bindings
+  - In-memory and file-based databases
+  - CLI shell interface
+
+## [0.3.0] - 2025-06-23
+
+### Added
+- Advanced indexing system (B-tree, hash, composite)
+- Cryptographic engine with AES-256-GCM, ChaCha20-Poly1305
+- Async operations with connection pooling
+- JSON support
+- C API for FFI
+
+### Changed
+- Updated to Zig 0.15.0-dev compatibility
+
+## [0.2.0] - 2025-05-01
+
+### Added
+- Basic SQL operations
+- B-tree storage engine
+- WAL support
+- DNS/PowerDNS integration examples
+- CLI interface
+
+## [0.1.0] - 2025-03-01
+
+### Added
+- Initial release
+- Basic embedded SQL database
 - Core storage engine
 - Simple query parser
-- Initial CLI implementation

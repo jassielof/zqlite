@@ -4,8 +4,39 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // ============================================================
+    // Build Profiles
+    // ============================================================
+    // core     = SQLite-like minimal (db, parser, executor)
+    // advanced = PostgreSQL features (core + json, performance, concurrent)
+    // full     = Everything (advanced + crypto, transport, cluster, ffi)
+    const profile = b.option([]const u8, "profile", "Build profile: core, advanced, full (default: full)") orelse "full";
+
+    // Individual feature flags (can override profile defaults)
+    const enable_crypto = b.option(bool, "crypto", "Enable post-quantum crypto") orelse
+        std.mem.eql(u8, profile, "full");
+    const enable_transport = b.option(bool, "transport", "Enable PQ-QUIC transport") orelse
+        std.mem.eql(u8, profile, "full");
+    const enable_json = b.option(bool, "json", "Enable JSON support") orelse
+        (std.mem.eql(u8, profile, "advanced") or std.mem.eql(u8, profile, "full"));
+    const enable_performance = b.option(bool, "performance", "Enable query cache/connection pool") orelse
+        (std.mem.eql(u8, profile, "advanced") or std.mem.eql(u8, profile, "full"));
+    const enable_concurrent = b.option(bool, "concurrent", "Enable async operations") orelse
+        (std.mem.eql(u8, profile, "advanced") or std.mem.eql(u8, profile, "full"));
+    const enable_ffi = b.option(bool, "ffi", "Enable C API") orelse
+        std.mem.eql(u8, profile, "full");
+
     // Build metadata options
     const build_options = b.addOptions();
+
+    // Add feature flags to build options
+    build_options.addOption([]const u8, "profile", profile);
+    build_options.addOption(bool, "enable_crypto", enable_crypto);
+    build_options.addOption(bool, "enable_transport", enable_transport);
+    build_options.addOption(bool, "enable_json", enable_json);
+    build_options.addOption(bool, "enable_performance", enable_performance);
+    build_options.addOption(bool, "enable_concurrent", enable_concurrent);
+    build_options.addOption(bool, "enable_ffi", enable_ffi);
 
     // Get Git commit hash
     const git_commit_result = std.process.Child.run(.{
@@ -70,22 +101,24 @@ pub fn build(b: *std.Build) void {
     // Install the library
     b.installArtifact(lib);
 
-    // Create C library for FFI
-    const c_lib = b.addLibrary(.{
-        .name = "zqlite_c",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/ffi/c_api.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
+    // Create C library for FFI (only if enabled)
+    if (enable_ffi) {
+        const c_lib = b.addLibrary(.{
+            .name = "zqlite_c",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/ffi/c_api.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
 
-    // Link the main library to the C FFI
-    c_lib.root_module.addImport("zqlite", lib.root_module);
-    c_lib.root_module.addImport("zsync", zsync.module("zsync"));
+        // Link the main library to the C FFI
+        c_lib.root_module.addImport("zqlite", lib.root_module);
+        c_lib.root_module.addImport("zsync", zsync.module("zsync"));
 
-    // Install the C library
-    b.installArtifact(c_lib);
+        // Install the C library
+        b.installArtifact(c_lib);
+    }
 
     // Export the zqlite module for use by other packages
     const zqlite_module = b.addModule("zqlite", .{
@@ -93,9 +126,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    
-    // Add zsync dependency to exported module
+
+    // Add dependencies to exported module
     zqlite_module.addImport("zsync", zsync.module("zsync"));
+    zqlite_module.addOptions("build_options", build_options);
 
     // Create the zqlite executable
     const exe = b.addExecutable(.{
@@ -133,9 +167,10 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    
-    // Add zsync dependency to tests
+
+    // Add dependencies to tests
     lib_unit_tests.root_module.addImport("zsync", zsync.module("zsync"));
+    lib_unit_tests.root_module.addOptions("build_options", build_options);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
@@ -149,6 +184,7 @@ pub fn build(b: *std.Build) void {
 
     exe_unit_tests.root_module.addImport("zqlite", lib.root_module);
     exe_unit_tests.root_module.addImport("zsync", zsync.module("zsync"));
+    exe_unit_tests.root_module.addOptions("build_options", build_options);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
