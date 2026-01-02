@@ -70,6 +70,7 @@ pub const VirtualMachine = struct {
             .Rollback => try self.executeRollback(result),
             .CreateIndex => |*create_idx| try self.executeCreateIndex(create_idx, result),
             .DropIndex => |*drop_idx| try self.executeDropIndex(drop_idx, result),
+            .DropTable => |*drop_tbl| try self.executeDropTable(drop_tbl, result),
         }
     }
 
@@ -521,43 +522,42 @@ pub const VirtualMachine = struct {
 
         // Clone columns for the storage engine (they're owned by the planner otherwise)
         var cloned_columns = try self.connection.allocator.alloc(storage.Column, create.columns.len);
-        var columns_cloned: usize = 0;
-        errdefer {
-            // Properly clean up cloned columns on error
-            for (cloned_columns[0..columns_cloned]) |column| {
-                self.connection.allocator.free(column.name);
-                if (column.default_value) |default_value| {
-                    default_value.deinit(self.connection.allocator);
-                }
-            }
-            self.connection.allocator.free(cloned_columns);
-        }
 
         for (create.columns, 0..) |column, i| {
             cloned_columns[i] = storage.Column{
-                .name = try self.connection.allocator.dupe(u8, column.name),
+                .name = self.connection.allocator.dupe(u8, column.name) catch {
+                    // Clean up already cloned columns on failure
+                    for (cloned_columns[0..i]) |c| {
+                        self.connection.allocator.free(c.name);
+                        if (c.default_value) |dv| dv.deinit(self.connection.allocator);
+                    }
+                    self.connection.allocator.free(cloned_columns);
+                    return error.OutOfMemory;
+                },
                 .data_type = column.data_type,
                 .is_primary_key = column.is_primary_key,
                 .is_nullable = column.is_nullable,
                 .default_value = if (column.default_value) |default_value|
-                    try self.cloneStorageDefaultValue(default_value)
+                    self.cloneStorageDefaultValue(default_value) catch {
+                        self.connection.allocator.free(cloned_columns[i].name);
+                        for (cloned_columns[0..i]) |c| {
+                            self.connection.allocator.free(c.name);
+                            if (c.default_value) |dv| dv.deinit(self.connection.allocator);
+                        }
+                        self.connection.allocator.free(cloned_columns);
+                        return error.OutOfMemory;
+                    }
                 else
                     null,
             };
-            columns_cloned = i + 1;
         }
 
         var schema = storage.TableSchema{
             .columns = cloned_columns,
         };
+        defer schema.deinit(self.connection.allocator);
 
-        self.connection.storage_engine.createTable(create.table_name, schema) catch |err| {
-            schema.deinit(self.connection.allocator);
-            return err;
-        };
-
-        // Clean up temporary schema (storage engine has its own clone now)
-        schema.deinit(self.connection.allocator);
+        try self.connection.storage_engine.createTable(create.table_name, schema);
         result.affected_rows = 1;
     }
 
@@ -1222,8 +1222,28 @@ pub const VirtualMachine = struct {
 
     /// Execute aggregate operation
     fn executeAggregate(self: *Self, agg: *planner.AggregateStep, result: *ExecutionResult) !void {
-        // For now, implement COUNT(*) aggregate function
+        // Get table schema for column lookup
+        const table = blk: {
+            var table_iter = self.connection.storage_engine.tables.iterator();
+            if (table_iter.next()) |entry| {
+                break :blk entry.value_ptr.*;
+            }
+            break :blk null;
+        };
+
         for (agg.aggregates) |aggregate_op| {
+            // Find the column index for the aggregate
+            const col_idx: usize = if (aggregate_op.column) |col_name| idx: {
+                if (table) |t| {
+                    for (t.schema.columns, 0..) |col, i| {
+                        if (std.mem.eql(u8, col.name, col_name)) {
+                            break :idx i;
+                        }
+                    }
+                }
+                break :idx 0;
+            } else 0;
+
             switch (aggregate_op.function_type) {
                 .Count => {
                     // COUNT(*) - count all rows in the result
@@ -1235,8 +1255,8 @@ pub const VirtualMachine = struct {
                     // SUM(column) - sum all numeric values in the specified column
                     var sum: f64 = 0.0;
                     for (result.rows.items) |row| {
-                        if (row.values.len > 0) {
-                            switch (row.values[0]) {
+                        if (col_idx < row.values.len) {
+                            switch (row.values[col_idx]) {
                                 .Integer => |i| sum += @floatFromInt(i),
                                 .Real => |r| sum += r,
                                 else => {}, // Skip non-numeric values
@@ -1251,8 +1271,8 @@ pub const VirtualMachine = struct {
                     var sum: f64 = 0.0;
                     var count: u32 = 0;
                     for (result.rows.items) |row| {
-                        if (row.values.len > 0) {
-                            switch (row.values[0]) {
+                        if (col_idx < row.values.len) {
+                            switch (row.values[col_idx]) {
                                 .Integer => |i| {
                                     sum += @floatFromInt(i);
                                     count += 1;
@@ -1273,8 +1293,8 @@ pub const VirtualMachine = struct {
                     // MIN(column) - minimum value
                     var min_value: ?storage.Value = null;
                     for (result.rows.items) |row| {
-                        if (row.values.len > 0) {
-                            const current_value = row.values[0];
+                        if (col_idx < row.values.len) {
+                            const current_value = row.values[col_idx];
                             if (min_value == null) {
                                 min_value = try self.cloneValue(current_value);
                             } else {
@@ -1292,8 +1312,8 @@ pub const VirtualMachine = struct {
                     // MAX(column) - maximum value
                     var max_value: ?storage.Value = null;
                     for (result.rows.items) |row| {
-                        if (row.values.len > 0) {
-                            const current_value = row.values[0];
+                        if (col_idx < row.values.len) {
+                            const current_value = row.values[col_idx];
                             if (max_value == null) {
                                 max_value = try self.cloneValue(current_value);
                             } else {
@@ -1307,9 +1327,58 @@ pub const VirtualMachine = struct {
                     const result_value = max_value orelse storage.Value.Null;
                     try self.finishAggregateResult(result, result_value);
                 },
-                else => {
-                    // TODO: Implement GroupConcat, CountDistinct
-                    return error.NotImplemented;
+                .GroupConcat => {
+                    // GROUP_CONCAT - concatenate all values with comma separator
+                    var concat: std.ArrayList(u8) = .{};
+                    defer concat.deinit(self.connection.allocator);
+                    var first = true;
+                    for (result.rows.items) |row| {
+                        if (row.values.len > 0) {
+                            if (!first) try concat.appendSlice(self.connection.allocator, ",");
+                            first = false;
+                            switch (row.values[0]) {
+                                .Text => |t| try concat.appendSlice(self.connection.allocator, t),
+                                .Integer => |i| {
+                                    var buf: [32]u8 = undefined;
+                                    const slice = std.fmt.bufPrint(&buf, "{d}", .{i}) catch "0";
+                                    try concat.appendSlice(self.connection.allocator, slice);
+                                },
+                                .Real => |r| {
+                                    var buf: [64]u8 = undefined;
+                                    const slice = std.fmt.bufPrint(&buf, "{d}", .{r}) catch "0";
+                                    try concat.appendSlice(self.connection.allocator, slice);
+                                },
+                                else => {},
+                            }
+                        }
+                    }
+                    const result_value = storage.Value{ .Text = try self.connection.allocator.dupe(u8, concat.items) };
+                    try self.finishAggregateResult(result, result_value);
+                },
+                .CountDistinct => {
+                    // COUNT(DISTINCT column) - count unique values
+                    var seen = std.StringHashMap(void).init(self.connection.allocator);
+                    defer {
+                        var iter = seen.iterator();
+                        while (iter.next()) |entry| {
+                            self.connection.allocator.free(entry.key_ptr.*);
+                        }
+                        seen.deinit();
+                    }
+                    for (result.rows.items) |row| {
+                        if (row.values.len > 0) {
+                            var key_buf: std.ArrayList(u8) = .{};
+                            defer key_buf.deinit(self.connection.allocator);
+                            try self.appendValueToKey(&key_buf, row.values[0]);
+                            const key = try self.connection.allocator.dupe(u8, key_buf.items);
+                            const gop = try seen.getOrPut(key);
+                            if (gop.found_existing) {
+                                self.connection.allocator.free(key);
+                            }
+                        }
+                    }
+                    const result_value = storage.Value{ .Integer = @intCast(seen.count()) };
+                    try self.finishAggregateResult(result, result_value);
                 },
             }
         }
@@ -1333,37 +1402,300 @@ pub const VirtualMachine = struct {
         try result.rows.append(self.connection.allocator, storage.Row{ .values = aggregate_row_values });
     }
 
-    /// Execute group by operation (stub implementation)
+    /// Execute group by operation
     fn executeGroupBy(self: *Self, group: *planner.GroupByStep, result: *ExecutionResult) !void {
+        // Group rows by the specified columns
+        // Key: hash of group column values -> list of rows in that group
+        var groups = std.StringHashMap(std.ArrayList(storage.Row)).init(self.connection.allocator);
+        defer {
+            var iter = groups.iterator();
+            while (iter.next()) |entry| {
+                self.connection.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(self.connection.allocator);
+            }
+            groups.deinit();
+        }
+
+        // Get table schema for column index lookup
+        const table = if (result.rows.items.len > 0) blk: {
+            // Try to find table from context - for now use first table in storage
+            var table_iter = self.connection.storage_engine.tables.iterator();
+            if (table_iter.next()) |entry| {
+                break :blk entry.value_ptr.*;
+            }
+            break :blk null;
+        } else null;
+
+        // Build groups
+        for (result.rows.items) |row| {
+            // Build group key from specified columns
+            var key_parts: std.ArrayList(u8) = .{};
+            defer key_parts.deinit(self.connection.allocator);
+
+            for (group.group_columns) |col_name| {
+                const col_idx = if (table) |t| self.findColumnIndex(t, col_name) else null;
+                const value = if (col_idx) |idx| blk: {
+                    if (idx < row.values.len) {
+                        break :blk row.values[idx];
+                    }
+                    break :blk storage.Value.Null;
+                } else if (row.values.len > 0) row.values[0] else storage.Value.Null;
+
+                // Append value representation to key
+                try self.appendValueToKey(&key_parts, value);
+                try key_parts.append(self.connection.allocator, '|');
+            }
+
+            const key = try self.connection.allocator.dupe(u8, key_parts.items);
+            errdefer self.connection.allocator.free(key);
+
+            // Get or create group
+            const gop = try groups.getOrPut(key);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{};
+            } else {
+                // Key already exists, free the duplicate
+                self.connection.allocator.free(key);
+            }
+
+            // Clone row and add to group
+            var cloned_values = try self.connection.allocator.alloc(storage.Value, row.values.len);
+            for (row.values, 0..) |v, i| {
+                cloned_values[i] = try self.cloneValue(v);
+            }
+            try gop.value_ptr.append(self.connection.allocator, storage.Row{ .values = cloned_values });
+        }
+
+        // Clear original rows
+        for (result.rows.items) |row| {
+            for (row.values) |value| {
+                value.deinit(self.connection.allocator);
+            }
+            self.connection.allocator.free(row.values);
+        }
+        result.rows.clearAndFree(self.connection.allocator);
+
+        // Process each group and compute aggregates
+        var group_iter = groups.iterator();
+        while (group_iter.next()) |entry| {
+            const group_rows = entry.value_ptr.items;
+            if (group_rows.len == 0) continue;
+
+            // Build result row: group columns + aggregates
+            const result_col_count = group.group_columns.len + group.aggregates.len;
+            var result_values = try self.connection.allocator.alloc(storage.Value, result_col_count);
+            var values_set: usize = 0;
+            errdefer {
+                for (result_values[0..values_set]) |v| v.deinit(self.connection.allocator);
+                self.connection.allocator.free(result_values);
+            }
+
+            // Add group column values from first row
+            for (group.group_columns, 0..) |col_name, i| {
+                const col_idx = if (table) |t| self.findColumnIndex(t, col_name) else null;
+                const value = if (col_idx) |idx| blk: {
+                    if (idx < group_rows[0].values.len) {
+                        break :blk group_rows[0].values[idx];
+                    }
+                    break :blk storage.Value.Null;
+                } else if (group_rows[0].values.len > 0) group_rows[0].values[0] else storage.Value.Null;
+
+                result_values[i] = try self.cloneValue(value);
+                values_set = i + 1;
+            }
+
+            // Compute aggregates for this group
+            for (group.aggregates, 0..) |agg, i| {
+                const agg_value = try self.computeAggregate(agg, group_rows, table);
+                result_values[group.group_columns.len + i] = agg_value;
+                values_set = group.group_columns.len + i + 1;
+            }
+
+            try result.rows.append(self.connection.allocator, storage.Row{ .values = result_values });
+
+            // Clean up group rows
+            for (group_rows) |row| {
+                for (row.values) |v| v.deinit(self.connection.allocator);
+                self.connection.allocator.free(row.values);
+            }
+        }
+    }
+
+    /// Find column index by name in table schema
+    fn findColumnIndex(self: *Self, table: *storage.Table, col_name: []const u8) ?usize {
         _ = self;
-        _ = group;
-        _ = result;
-        // TODO: Implement group by operations
-        return error.NotImplemented;
+        for (table.schema.columns, 0..) |col, i| {
+            if (std.mem.eql(u8, col.name, col_name)) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    /// Append value representation to key buffer for grouping
+    fn appendValueToKey(self: *Self, key: *std.ArrayList(u8), value: storage.Value) !void {
+        switch (value) {
+            .Integer => |i| {
+                var buf: [32]u8 = undefined;
+                const slice = std.fmt.bufPrint(&buf, "{d}", .{i}) catch "0";
+                try key.appendSlice(self.connection.allocator, slice);
+            },
+            .Text => |t| try key.appendSlice(self.connection.allocator, t),
+            .Real => |r| {
+                var buf: [64]u8 = undefined;
+                const slice = std.fmt.bufPrint(&buf, "{d}", .{r}) catch "0";
+                try key.appendSlice(self.connection.allocator, slice);
+            },
+            .Null => try key.appendSlice(self.connection.allocator, "NULL"),
+            else => try key.appendSlice(self.connection.allocator, "?"),
+        }
+    }
+
+    /// Compute aggregate value for a group of rows
+    fn computeAggregate(self: *Self, agg: planner.AggregateOperation, rows: []storage.Row, table: ?*storage.Table) !storage.Value {
+        const col_idx: ?usize = if (agg.column) |col_name| blk: {
+            if (table) |t| {
+                break :blk self.findColumnIndex(t, col_name);
+            }
+            break :blk null;
+        } else null;
+
+        switch (agg.function_type) {
+            .Count => {
+                return storage.Value{ .Integer = @intCast(rows.len) };
+            },
+            .Sum => {
+                var sum: f64 = 0.0;
+                for (rows) |row| {
+                    const val = self.getAggregateColumnValue(row, col_idx);
+                    switch (val) {
+                        .Integer => |i| sum += @floatFromInt(i),
+                        .Real => |r| sum += r,
+                        else => {},
+                    }
+                }
+                return storage.Value{ .Real = sum };
+            },
+            .Avg => {
+                var sum: f64 = 0.0;
+                var count: u32 = 0;
+                for (rows) |row| {
+                    const val = self.getAggregateColumnValue(row, col_idx);
+                    switch (val) {
+                        .Integer => |i| {
+                            sum += @floatFromInt(i);
+                            count += 1;
+                        },
+                        .Real => |r| {
+                            sum += r;
+                            count += 1;
+                        },
+                        else => {},
+                    }
+                }
+                return storage.Value{ .Real = if (count > 0) sum / @as(f64, @floatFromInt(count)) else 0.0 };
+            },
+            .Min => {
+                var min_val: ?storage.Value = null;
+                for (rows) |row| {
+                    const val = self.getAggregateColumnValue(row, col_idx);
+                    if (min_val == null) {
+                        min_val = try self.cloneValue(val);
+                    } else if (self.compareValues(val, min_val.?) == .lt) {
+                        min_val.?.deinit(self.connection.allocator);
+                        min_val = try self.cloneValue(val);
+                    }
+                }
+                return min_val orelse storage.Value.Null;
+            },
+            .Max => {
+                var max_val: ?storage.Value = null;
+                for (rows) |row| {
+                    const val = self.getAggregateColumnValue(row, col_idx);
+                    if (max_val == null) {
+                        max_val = try self.cloneValue(val);
+                    } else if (self.compareValues(val, max_val.?) == .gt) {
+                        max_val.?.deinit(self.connection.allocator);
+                        max_val = try self.cloneValue(val);
+                    }
+                }
+                return max_val orelse storage.Value.Null;
+            },
+            .GroupConcat => {
+                var concat: std.ArrayList(u8) = .{};
+                defer concat.deinit(self.connection.allocator);
+                var first = true;
+                for (rows) |row| {
+                    const val = self.getAggregateColumnValue(row, col_idx);
+                    if (!first) try concat.appendSlice(self.connection.allocator, ",");
+                    first = false;
+                    switch (val) {
+                        .Text => |t| try concat.appendSlice(self.connection.allocator, t),
+                        .Integer => |i| {
+                            var buf: [32]u8 = undefined;
+                            const slice = std.fmt.bufPrint(&buf, "{d}", .{i}) catch "0";
+                            try concat.appendSlice(self.connection.allocator, slice);
+                        },
+                        else => {},
+                    }
+                }
+                return storage.Value{ .Text = try self.connection.allocator.dupe(u8, concat.items) };
+            },
+            .CountDistinct => {
+                var seen = std.StringHashMap(void).init(self.connection.allocator);
+                defer seen.deinit();
+                for (rows) |row| {
+                    const val = self.getAggregateColumnValue(row, col_idx);
+                    var key_buf: std.ArrayList(u8) = .{};
+                    defer key_buf.deinit(self.connection.allocator);
+                    try self.appendValueToKey(&key_buf, val);
+                    const key = try self.connection.allocator.dupe(u8, key_buf.items);
+                    const gop = try seen.getOrPut(key);
+                    if (gop.found_existing) {
+                        self.connection.allocator.free(key);
+                    }
+                }
+                // Clean up keys
+                var iter = seen.iterator();
+                while (iter.next()) |entry| {
+                    self.connection.allocator.free(entry.key_ptr.*);
+                }
+                return storage.Value{ .Integer = @intCast(seen.count()) };
+            },
+        }
+    }
+
+    /// Get column value for aggregate computation
+    fn getAggregateColumnValue(self: *Self, row: storage.Row, col_idx: ?usize) storage.Value {
+        _ = self;
+        if (col_idx) |idx| {
+            if (idx < row.values.len) {
+                return row.values[idx];
+            }
+        }
+        // Default to first column if no specific column
+        if (row.values.len > 0) {
+            return row.values[0];
+        }
+        return storage.Value.Null;
     }
 
     /// Execute BEGIN TRANSACTION
     fn executeBeginTransaction(self: *Self, result: *ExecutionResult) !void {
-        _ = self;
         _ = result;
-        // TODO: Implement transaction support in storage engine
-        // For now, transactions are a no-op
+        try self.connection.beginTransaction();
     }
 
     /// Execute COMMIT
     fn executeCommit(self: *Self, result: *ExecutionResult) !void {
-        _ = self;
         _ = result;
-        // TODO: Implement transaction support in storage engine
-        // For now, transactions are a no-op
+        try self.connection.commitTransaction();
     }
 
     /// Execute ROLLBACK
     fn executeRollback(self: *Self, result: *ExecutionResult) !void {
-        _ = self;
         _ = result;
-        // TODO: Implement transaction support in storage engine
-        // For now, transactions are a no-op
+        try self.connection.rollbackTransaction();
     }
 
     /// Execute CREATE INDEX
@@ -1389,17 +1721,53 @@ pub const VirtualMachine = struct {
             }
         }
 
-        // TODO: Actually create and store the index
-        // For now, index creation is a no-op
+        // Check if index already exists
+        if (self.connection.storage_engine.getIndex(create_idx.index_name) != null) {
+            if (create_idx.if_not_exists) {
+                return; // Silently skip if IF NOT EXISTS is specified
+            }
+            return error.IndexAlreadyExists;
+        }
+
+        // Create the index in storage engine
+        try self.connection.storage_engine.createIndex(
+            create_idx.index_name,
+            create_idx.table_name,
+            create_idx.columns,
+            create_idx.unique,
+        );
     }
 
     /// Execute DROP INDEX
     fn executeDropIndex(self: *Self, drop_idx: *planner.DropIndexStep, result: *ExecutionResult) !void {
-        _ = self;
-        _ = drop_idx;
         _ = result;
-        // TODO: Implement index management in storage engine
-        // For now, index dropping is a no-op
+
+        // Check if index exists
+        if (self.connection.storage_engine.getIndex(drop_idx.index_name) == null) {
+            if (drop_idx.if_exists) {
+                return; // Silently skip if IF EXISTS is specified
+            }
+            return error.IndexNotFound;
+        }
+
+        // Drop the index
+        try self.connection.storage_engine.dropIndex(drop_idx.index_name);
+    }
+
+    /// Execute DROP TABLE
+    fn executeDropTable(self: *Self, drop_tbl: *planner.DropTableStep, result: *ExecutionResult) !void {
+        _ = result;
+
+        // Check if table exists
+        if (self.connection.storage_engine.getTable(drop_tbl.table_name) == null) {
+            if (drop_tbl.if_exists) {
+                return; // Silently skip if IF EXISTS is specified
+            }
+            return error.TableNotFound;
+        }
+
+        // Drop the table
+        try self.connection.storage_engine.dropTable(drop_tbl.table_name);
     }
 };
 

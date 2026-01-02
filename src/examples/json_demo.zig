@@ -59,7 +59,7 @@ pub fn main() !void {
     try stmt.bindParameter(1, json_value);
     try stmt.bindParameter(2, jsonb_value);
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit();
 
     std.debug.print("✅ Inserted product with JSON metadata\n", .{});

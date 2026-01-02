@@ -110,7 +110,7 @@ fn demoSimplifiedParameterBinding(conn: *zqlite.Connection) !void {
     try stmt.bind(2, "John Doe"); // String -> Text
     try stmt.bind(3, 1); // Integer -> Integer
 
-    _ = try stmt.execute(conn);
+    _ = try stmt.execute();
     std.debug.print("   ✅ Simplified binding: auto-detected types\n", .{});
 
     // Test different types
@@ -120,7 +120,7 @@ fn demoSimplifiedParameterBinding(conn: *zqlite.Connection) !void {
     try stmt2.bind(0, "login");
     try stmt2.bind(1, "user123");
     try stmt2.bindNull(2); // Explicit NULL
-    _ = try stmt2.execute(conn);
+    _ = try stmt2.execute();
 
     std.debug.print("   ✅ Mixed types and NULL values work perfectly\n", .{});
 
@@ -132,7 +132,7 @@ fn demoSimplifiedParameterBinding(conn: *zqlite.Connection) !void {
     try stmt3.bind(0, "user456");
     try stmt3.bind(1, "user2@example.com");
     try stmt3.bind(2, optional_name); // Optional -> NULL
-    _ = try stmt3.execute(conn);
+    _ = try stmt3.execute();
 
     std.debug.print("   ✅ Optional types automatically convert to NULL\n", .{});
 }
@@ -178,7 +178,7 @@ fn demoTransactionHelpers(conn: *zqlite.Connection) !void {
             defer stmt.deinit();
             try stmt.bind(0, ctx.user_id);
             try stmt.bind(1, "admin@example.com");
-            _ = try stmt.execute(connection);
+            _ = try stmt.execute();
 
             // Log each permission
             for (ctx.permissions) |perm| {
@@ -187,7 +187,7 @@ fn demoTransactionHelpers(conn: *zqlite.Connection) !void {
                 try log_stmt.bind(0, "grant_permission");
                 try log_stmt.bind(1, ctx.user_id);
                 try log_stmt.bind(2, perm);
-                _ = try log_stmt.execute(connection);
+                _ = try log_stmt.execute();
             }
         }
     }.run, context);

@@ -306,6 +306,25 @@ pub fn build(b: *std.Build) void {
     const create_table_leak_step = b.step("test-create-table-leaks", "Test CREATE TABLE DEFAULT constraint memory fixes");
     create_table_leak_step.dependOn(&run_create_table_leak_test.step);
 
+    // Add dedicated memory leak detection script
+    const memory_leak_test = b.addExecutable(.{
+        .name = "memory_leak_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/memory/memory_leak_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    memory_leak_test.root_module.addImport("zqlite", lib.root_module);
+    memory_leak_test.root_module.addImport("zsync", zsync.module("zsync"));
+    memory_leak_test.root_module.addOptions("build_options", build_options);
+
+    const run_memory_leak_test = b.addRunArtifact(memory_leak_test);
+
+    const memory_leak_step = b.step("test-memory-leaks", "Run dedicated memory leak detection");
+    memory_leak_step.dependOn(&run_memory_leak_test.step);
+
     // Add SQL parser fuzzer
     const sql_parser_fuzzer = b.addExecutable(.{
         .name = "sql_parser_fuzzer",

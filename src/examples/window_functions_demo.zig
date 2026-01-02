@@ -40,7 +40,7 @@ pub fn main() !void {
         try stmt.bindParameter(2, zqlite.storage.Value{ .Text = dept_copy });
         try stmt.bindParameter(3, zqlite.storage.Value{ .Integer = emp.salary });
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit();
     }
 

@@ -39,6 +39,7 @@ pub const BTree = struct {
             // Split root
             const new_root_page = try self.pager.allocatePage();
             var new_root = try Node.initInternal(self.allocator, self.order);
+            defer new_root.deinit(self.allocator);
             new_root.children[0] = self.root_page;
 
             try self.splitChild(&new_root, 0);
@@ -117,23 +118,30 @@ pub const BTree = struct {
             try Node.initLeaf(self.allocator, self.order)
         else
             try Node.initInternal(self.allocator, self.order);
+        defer new_child.deinit(self.allocator);
 
         const mid_index = self.order / 2;
 
         // Move upper half of keys to new node
-        const keys_to_move = full_child.key_count - mid_index - 1;
-        if (keys_to_move > 0) {
-            @memcpy(new_child.keys[0..keys_to_move], full_child.keys[mid_index + 1 .. full_child.key_count]);
+        // For leaf nodes: include mid_index (key and value stay together in leaves)
+        // For internal nodes: mid_index key goes to parent, children go to new node
+        if (full_child.is_leaf) {
+            // Leaf split: right child gets keys[mid_index..] and values[mid_index..]
+            const keys_to_move = full_child.key_count - mid_index;
+            @memcpy(new_child.keys[0..keys_to_move], full_child.keys[mid_index..full_child.key_count]);
+            @memcpy(new_child.values[0..keys_to_move], full_child.values[mid_index..full_child.key_count]);
             new_child.key_count = @intCast(keys_to_move);
-
-            if (full_child.is_leaf) {
-                @memcpy(new_child.values[0..keys_to_move], full_child.values[mid_index + 1 .. full_child.key_count]);
-            } else {
+        } else {
+            // Internal node split: mid_index key goes to parent, rest to new node
+            const keys_to_move = full_child.key_count - mid_index - 1;
+            if (keys_to_move > 0) {
+                @memcpy(new_child.keys[0..keys_to_move], full_child.keys[mid_index + 1 .. full_child.key_count]);
                 @memcpy(new_child.children[0 .. keys_to_move + 1], full_child.children[mid_index + 1 .. full_child.key_count + 1]);
+                new_child.key_count = @intCast(keys_to_move);
             }
         }
 
-        // Update counts
+        // Update counts - left child keeps [0, mid_index)
         full_child.key_count = @intCast(mid_index);
 
         // Move the middle key up to parent

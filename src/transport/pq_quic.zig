@@ -1,7 +1,25 @@
 const std = @import("std");
 
-/// 🌐 ZQLite Post-Quantum QUIC Transport
-/// World's first database with post-quantum QUIC support
+/// ZQLite Post-Quantum QUIC Transport
+///
+/// EXPERIMENTAL: This module is a proof-of-concept implementation demonstrating
+/// post-quantum secure database transport. It is NOT production-ready.
+///
+/// Current Limitations:
+/// - Key derivation uses placeholder values (not cryptographically secure)
+/// - No actual network I/O - packet send/receive are simulated
+/// - ML-KEM-768 key exchange is simulated, not using actual PQ algorithms
+/// - Connection management lacks proper cleanup and concurrency controls
+/// - Zero-RTT implementation is incomplete
+///
+/// For production use, this module requires:
+/// 1. Integration with a real QUIC implementation (e.g., quiche, msquic)
+/// 2. Proper ML-KEM-768 or ML-KEM-1024 key encapsulation
+/// 3. Full TLS 1.3 handshake with PQ key exchange
+/// 4. Robust connection lifecycle management
+///
+/// The cryptographic primitives (AES-GCM, ChaCha20-Poly1305) are production-ready
+/// via std.crypto, but the QUIC protocol layer is not complete.
 pub const PQQuicTransport = struct {
     allocator: std.mem.Allocator,
     quic_crypto: QuicCrypto,

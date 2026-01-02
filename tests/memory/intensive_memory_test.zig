@@ -81,7 +81,7 @@ fn testDefaultTimestampMemory(allocator: std.mem.Allocator) !void {
         var stmt = try conn.prepare("SELECT id, name, created_at, updated_at FROM events WHERE id < 10");
         defer stmt.deinit();
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit(allocator);
 
         // Verify results
@@ -129,7 +129,7 @@ fn testHeavyCrudOperations(allocator: std.mem.Allocator) !void {
         var stmt = try conn.prepare("SELECT COUNT(*) FROM stress_test");
         defer stmt.deinit();
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit(allocator);
     }
 }
@@ -162,7 +162,7 @@ fn testLargeTextOperations(allocator: std.mem.Allocator) !void {
     var stmt = try conn.prepare("SELECT id, content FROM text_test WHERE id < 5");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     if (result.rows.items.len != 5) {
@@ -250,7 +250,7 @@ fn testComplexJoinOperations(allocator: std.mem.Allocator) !void {
         );
         defer stmt.deinit();
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit(allocator);
 
         // Three-table JOIN
@@ -264,7 +264,7 @@ fn testComplexJoinOperations(allocator: std.mem.Allocator) !void {
         );
         defer stmt2.deinit();
 
-        var result2 = try stmt2.execute(conn);
+        var result2 = try stmt2.execute();
         defer result2.deinit(allocator);
     }
 }
@@ -297,7 +297,7 @@ fn testMultipleConnectionLifecycle(allocator: std.mem.Allocator) !void {
         var stmt = try conn.prepare("SELECT COUNT(*) FROM lifecycle_test");
         defer stmt.deinit();
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit(allocator);
 
         switch (result.rows.items[0].values[0]) {
@@ -343,13 +343,13 @@ fn testPreparedStatementStress(allocator: std.mem.Allocator) !void {
     // Execute statements multiple times
     var round: u32 = 0;
     while (round < 20) : (round += 1) {
-        var result1 = try stmt1.execute(conn);
+        var result1 = try stmt1.execute();
         defer result1.deinit(allocator);
 
-        var result2 = try stmt2.execute(conn);
+        var result2 = try stmt2.execute();
         defer result2.deinit(allocator);
 
-        var result3 = try stmt3.execute(conn);
+        var result3 = try stmt3.execute();
         defer result3.deinit(allocator);
 
         // Update data between queries

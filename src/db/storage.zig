@@ -66,8 +66,18 @@ pub const StorageEngine = struct {
 
     /// Create a new table
     pub fn createTable(self: *Self, name: []const u8, schema: TableSchema) !void {
+        // Check if table already exists
+        if (self.tables.contains(name)) {
+            return error.TableAlreadyExists;
+        }
+
         const table = try Table.create(self.allocator, self.pager, name, schema);
-        try self.tables.put(try self.allocator.dupe(u8, name), table);
+        errdefer table.deinit();
+
+        const duped_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(duped_name);
+
+        try self.tables.put(duped_name, table);
 
         // Persist table metadata if not in-memory
         if (!self.is_memory) {
@@ -99,7 +109,79 @@ pub const StorageEngine = struct {
         if (self.tables.fetchRemove(name)) |entry| {
             entry.value.deinit();
             self.allocator.free(entry.key);
+
+            // Rewrite metadata page atomically after drop
+            if (!self.is_memory) {
+                try self.rewriteAllMetadata();
+            }
         }
+    }
+
+    /// Atomically rewrite all table metadata to page 0
+    /// This ensures consistency after drops or schema changes
+    fn rewriteAllMetadata(self: *Self) !void {
+        if (self.is_memory) return;
+
+        const page = try self.pager.getPage(METADATA_PAGE_ID);
+
+        // Clear the page first
+        @memset(page.data, 0);
+
+        // Write magic number
+        std.mem.writeInt(u32, page.data[0..4], METADATA_MAGIC, .little);
+
+        var offset: usize = 8;
+        var table_count: u32 = 0;
+
+        // Write all tables
+        var table_iterator = self.tables.iterator();
+        while (table_iterator.next()) |entry| {
+            const table = entry.value_ptr.*;
+
+            // Check if we have space for this table
+            const min_space = 4 + table.name.len + 2;
+            if (offset + min_space > page.data.len) {
+                break; // No more space
+            }
+
+            // Write table name
+            std.mem.writeInt(u16, page.data[offset..][0..2], @intCast(table.name.len), .little);
+            offset += 2;
+            @memcpy(page.data[offset..][0..table.name.len], table.name);
+            offset += table.name.len;
+
+            // Write column count
+            std.mem.writeInt(u16, page.data[offset..][0..2], @intCast(table.schema.columns.len), .little);
+            offset += 2;
+
+            // Write columns
+            for (table.schema.columns) |column| {
+                const col_space = 4 + column.name.len;
+                if (offset + col_space > page.data.len) break;
+
+                std.mem.writeInt(u16, page.data[offset..][0..2], @intCast(column.name.len), .little);
+                offset += 2;
+                @memcpy(page.data[offset..][0..column.name.len], column.name);
+                offset += column.name.len;
+
+                page.data[offset] = @intFromEnum(column.data_type);
+                offset += 1;
+
+                var flags: u8 = 0;
+                if (column.is_primary_key) flags |= 0x01;
+                if (column.is_nullable) flags |= 0x02;
+                page.data[offset] = flags;
+                offset += 1;
+            }
+
+            table_count += 1;
+        }
+
+        // Write final table count
+        std.mem.writeInt(u32, page.data[4..8], table_count, .little);
+
+        // Mark page as dirty to ensure it's written
+        try self.pager.markDirty(METADATA_PAGE_ID);
     }
 
     /// Create an index
@@ -121,18 +203,95 @@ pub const StorageEngine = struct {
         }
     }
 
+    /// Metadata page layout:
+    /// - Bytes 0-3: Magic number (0x5A514C54 = "ZQLT")
+    /// - Bytes 4-7: Table count
+    /// - Bytes 8+: Table entries (variable length)
+    /// Each table entry:
+    /// - 2 bytes: name length
+    /// - N bytes: name
+    /// - 2 bytes: column count
+    /// - For each column:
+    ///   - 2 bytes: name length
+    ///   - N bytes: name
+    ///   - 1 byte: data type
+    ///   - 1 byte: flags (is_primary_key, is_nullable)
+    const METADATA_MAGIC: u32 = 0x5A514C54; // "ZQLT"
+    const METADATA_PAGE_ID: u32 = 1;
+
     /// Load existing tables from storage
     fn loadTables(self: *Self) !void {
-        // This would read table metadata from page 0 or a dedicated metadata area
-        // For now, this is a placeholder
-        _ = self;
+        if (self.is_memory) return; // No persistence for in-memory databases
+
+        // Try to read metadata page
+        const page = self.pager.getPage(METADATA_PAGE_ID) catch return;
+
+        // Check magic number
+        if (page.data.len < 8) return;
+        const magic = std.mem.readInt(u32, page.data[0..4], .little);
+        if (magic != METADATA_MAGIC) return; // Not a valid ZQLite database or new file
+
+        const table_count = std.mem.readInt(u32, page.data[4..8], .little);
+        var offset: usize = 8;
+
+        var tables_loaded: u32 = 0;
+        while (tables_loaded < table_count and offset + 4 < page.data.len) {
+            // Read table name
+            const name_len = std.mem.readInt(u16, page.data[offset..][0..2], .little);
+            offset += 2;
+            if (offset + name_len > page.data.len) break;
+
+            const table_name = try self.allocator.dupe(u8, page.data[offset..][0..name_len]);
+            offset += name_len;
+
+            // Read column count
+            if (offset + 2 > page.data.len) {
+                self.allocator.free(table_name);
+                break;
+            }
+            const column_count = std.mem.readInt(u16, page.data[offset..][0..2], .little);
+            offset += 2;
+
+            // Read columns
+            var columns = try self.allocator.alloc(Column, column_count);
+            var col_idx: usize = 0;
+            while (col_idx < column_count and offset + 4 < page.data.len) {
+                const col_name_len = std.mem.readInt(u16, page.data[offset..][0..2], .little);
+                offset += 2;
+                if (offset + col_name_len + 2 > page.data.len) break;
+
+                columns[col_idx].name = try self.allocator.dupe(u8, page.data[offset..][0..col_name_len]);
+                offset += col_name_len;
+
+                columns[col_idx].data_type = @enumFromInt(page.data[offset]);
+                offset += 1;
+
+                const flags = page.data[offset];
+                offset += 1;
+                columns[col_idx].is_primary_key = (flags & 0x01) != 0;
+                columns[col_idx].is_nullable = (flags & 0x02) != 0;
+                columns[col_idx].default_value = null;
+
+                col_idx += 1;
+            }
+
+            // Create the table
+            const schema = TableSchema{ .columns = columns[0..col_idx] };
+            const table = try Table.create(self.allocator, self.pager, table_name, schema);
+            try self.tables.put(table_name, table);
+
+            tables_loaded += 1;
+        }
     }
 
     /// Save table metadata to storage
+    /// Uses atomic rewrite to ensure consistency
     fn saveTableMetadata(self: *Self, table: *Table) !void {
-        // This would write table schema to a metadata page
-        _ = self;
-        _ = table;
+        _ = table; // Table is already in self.tables
+        if (self.is_memory) return;
+
+        // Rewrite all metadata atomically
+        try self.rewriteAllMetadata();
     }
 
     /// Clean up storage engine

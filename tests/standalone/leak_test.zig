@@ -35,7 +35,7 @@ pub fn main() !void {
     var stmt = try conn.prepare("SELECT id, name FROM test WHERE id = 1");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit();
 
     std.debug.print("✅ Test completed - found {} rows\n", .{result.rows.items.len});

@@ -413,8 +413,24 @@ pub const Parser = struct {
                 },
             };
         } else if (std.meta.activeTag(self.current_token) == .Table) {
-            // TODO: Implement DROP TABLE
-            return error.NotImplemented;
+            try self.advance();
+
+            // Optional IF EXISTS
+            var if_exists = false;
+            if (std.meta.activeTag(self.current_token) == .If) {
+                try self.advance();
+                try self.expect(.Exists);
+                if_exists = true;
+            }
+
+            const table_name = try self.expectIdentifier();
+
+            return ast.Statement{
+                .DropTable = ast.DropTableStatement{
+                    .table_name = table_name,
+                    .if_exists = if_exists,
+                },
+            };
         }
 
         return error.UnexpectedToken;
@@ -623,34 +639,65 @@ pub const Parser = struct {
 
     /// Parse a column in SELECT
     fn parseColumn(self: *Self) !ast.Column {
-        // Check for aggregate functions like COUNT(*)
-        if (std.meta.activeTag(self.current_token) == .Count) {
-            try self.advance(); // consume COUNT
+        // Check for aggregate functions like COUNT(*), SUM(col), AVG(col), MIN(col), MAX(col)
+        const agg_type: ?ast.AggregateFunctionType = switch (std.meta.activeTag(self.current_token)) {
+            .Count => .Count,
+            .Sum => .Sum,
+            .Avg => .Avg,
+            .Min => .Min,
+            .Max => .Max,
+            else => null,
+        };
+
+        if (agg_type) |func_type| {
+            const func_name = switch (func_type) {
+                .Count => "COUNT",
+                .Sum => "SUM",
+                .Avg => "AVG",
+                .Min => "MIN",
+                .Max => "MAX",
+                else => "AGGREGATE",
+            };
+
+            try self.advance(); // consume function token
             try self.expect(.LeftParen); // expect '('
-            try self.expect(.Asterisk); // expect '*'
+
+            // Check for * (only valid for COUNT)
+            var column_name: ?[]const u8 = null;
+            if (std.meta.activeTag(self.current_token) == .Asterisk) {
+                if (func_type != .Count) {
+                    return error.AsteriskOnlyValidForCount;
+                }
+                try self.advance(); // consume '*'
+            } else {
+                // Expect column name
+                column_name = try self.expectIdentifier();
+            }
+
             try self.expect(.RightParen); // expect ')'
 
+            // Build display name
+            const display_name = if (column_name) |col|
+                try std.fmt.allocPrint(self.allocator, "{s}({s})", .{ func_name, col })
+            else
+                try std.fmt.allocPrint(self.allocator, "{s}(*)", .{func_name});
+
             var alias: ?[]const u8 = null;
-            // Check for AS alias or implicit alias
+            // Check for AS alias
             if (std.meta.activeTag(self.current_token) == .As) {
                 try self.advance(); // consume AS
                 alias = try self.expectIdentifierOrKeyword();
-            } else if (std.meta.activeTag(self.current_token) == .Identifier or
-                std.meta.activeTag(self.current_token) == .Count or
-                std.meta.activeTag(self.current_token) == .Sum or
-                std.meta.activeTag(self.current_token) == .Avg or
-                std.meta.activeTag(self.current_token) == .Min or
-                std.meta.activeTag(self.current_token) == .Max)
-            {
-                alias = try self.expectIdentifierOrKeyword();
+            } else if (std.meta.activeTag(self.current_token) == .Identifier) {
+                // Implicit alias (identifier not followed by aggregate-related tokens)
+                alias = try self.expectIdentifier();
             }
 
             return ast.Column{
-                .name = try self.allocator.dupe(u8, "COUNT(*)"),
+                .name = display_name,
                 .expression = ast.ColumnExpression{
                     .Aggregate = ast.AggregateFunction{
-                        .function_type = ast.AggregateFunctionType.Count,
-                        .column = null, // NULL for COUNT(*)
+                        .function_type = func_type,
+                        .column = column_name,
                     },
                 },
                 .alias = alias,
@@ -1334,6 +1381,8 @@ pub const Parser = struct {
 /// Parse SQL statement (convenience function)
 pub fn parse(allocator: std.mem.Allocator, sql: []const u8) !ParseResult {
     var parser = try Parser.init(allocator, sql);
+    errdefer parser.deinit();
+
     const statement = try parser.parse();
     return ParseResult{
         .statement = statement,

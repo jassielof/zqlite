@@ -5,48 +5,45 @@
 # zqlite 🚀🔐
 
 ![Zig](https://img.shields.io/badge/zig-0.16.0--dev-f7a41d?style=flat-square)
-![Status](https://img.shields.io/badge/status-production--ready-green?style=flat-square)
-![Crypto](https://img.shields.io/badge/crypto-post--quantum-blueviolet?style=flat-square)
-![ZKP](https://img.shields.io/badge/ZKP-bulletproofs-orange?style=flat-square)
+![Status](https://img.shields.io/badge/status-beta-yellow?style=flat-square)
+![Crypto](https://img.shields.io/badge/PQC-experimental-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-cross--platform-lightgrey?style=flat-square)
 ![Performance](https://img.shields.io/badge/performance-high--speed-brightgreen?style=flat-square)
 
-> **Next-generation post-quantum cryptographic database and query engine for Zig**
-> A standalone embedded database that can serve as a drop-in replacement for SQLite or PostgreSQL, with optional post-quantum cryptographic features. Powers [Ghostchain](https://github.com/ghostkellz/ghostchain) and [Ghostwire](https://github.com/ghostkellz/ghostwire) for quantum-safe distributed systems.
+> **High-performance embedded database and query engine for Zig**
+> A standalone embedded database offering SQLite compatibility with experimental post-quantum cryptographic features. Powers [Ghostchain](https://github.com/ghostkellz/ghostchain) and [Ghostwire](https://github.com/ghostkellz/ghostwire).
+
+**Note**: Post-quantum cryptography features (ML-KEM, ML-DSA, ZKP) are **experimental proof-of-concept** implementations. The core database engine (SQLite-compatible storage, SQL parsing, WAL) is the primary focus for production use.
 
 ---
 
 ## 🌟 Key Features
 
-### 🚀 **CNS Integration & Ghostchain Compatibility**
-- **CNS Adapter**: Native support for Crypto Name Server (see [CNS](https://github.com/ghostkellz/ghostchain))
-- **Domain-Specific Crypto**: Specialized hash functions for DNS record security
-- **Ghostchain Addresses**: Generate and validate quantum-safe blockchain addresses
-- **Decentralized Name Resolution**: Seamless integration with distributed name systems
-
-### 🔮 **Post-Quantum Cryptographic Database**
-- **ML-KEM-768 & ML-DSA-65**: NIST-standardized post-quantum algorithms
-- **Quantum-Safe Storage**: Future-proof your data against quantum computers
-- **Hybrid Cryptography**: Classical + post-quantum for migration safety
-- **Embedded Security**: Zero-configuration quantum-resistant database
-
-### 🗃️ **Traditional Database Compatibility**
-- **SQLite Replacement**: Drop-in replacement for embedded applications
-- **PostgreSQL Features**: Advanced SQL features and data types
-- **Fast Performance**: B-tree storage with Write-Ahead Logging (WAL)
+### 🗃️ **Core Database (Production Ready)**
+- **SQLite Compatibility**: Drop-in replacement for embedded applications
+- **PostgreSQL-style SQL**: Extended data types (UUID, JSON, timestamps)
+- **B+ Tree Storage**: Efficient indexing with Write-Ahead Logging (WAL)
 - **Zero Configuration**: Single-file database, no server setup required
+- **Memory-Safe**: Pure Zig implementation with no undefined behavior
+- **Interactive CLI**: Full SQL shell with tab completion
 
-### 🌐 **High-Performance Networking**
-- **Post-Quantum QUIC**: Quantum-safe transport layer
-- **Zero-Copy Operations**: Minimal memory overhead for high throughput
-- **Hybrid Key Exchange**: X25519 + ML-KEM-768 for secure connections
-- **Real-time Encryption**: >10M packets/sec encryption performance
+### 🔐 **Encryption (Stable)**
+- **Field-Level Encryption**: ChaCha20-Poly1305 AEAD per column
+- **Secure Key Derivation**: Argon2 password hashing
+- **Transparent Encryption**: Automatic encrypt/decrypt on read/write
 
-### 🔬 **Advanced Cryptographic Features**
-- **Bulletproof Range Proofs**: Prove values without revealing them
-- **Blockchain-style Transaction Log**: Immutable audit trail
-- **Secure Memory Management**: Constant-time operations
-- **Assembly Optimizations**: AVX2, AVX-512, ARM NEON
+### 🔮 **Post-Quantum Crypto (Experimental)**
+> ⚠️ **Proof of Concept** - Not for production use
+
+- **ML-KEM-768**: NIST post-quantum key encapsulation (experimental)
+- **ML-DSA-65**: Post-quantum digital signatures (experimental)
+- **Hybrid Signatures**: Ed25519 + ML-DSA (experimental)
+- **Bulletproofs ZKP**: Zero-knowledge range proofs (experimental)
+
+### 🌐 **Networking (Experimental)**
+- **QUIC Transport**: Modern UDP-based transport layer
+- **Hybrid Key Exchange**: X25519 + ML-KEM-768
+- **CNS Integration**: Ghostchain name resolution
 
 ---
 
@@ -88,38 +85,24 @@ zig build run-powerdns
 
 ---
 
-## 📋 Core Features
+## 📋 Feature Status
 
-### 🔐 **Post-Quantum Cryptography**
-- **ML-KEM-768**: Quantum-safe key encapsulation mechanism
-- **ML-DSA-65**: Post-quantum digital signatures  
-- **SLH-DSA**: Stateless hash-based signatures
-- **Hybrid Security**: Classical + PQ for migration safety
-
-### 🕵️ **Zero-Knowledge Proofs**
-- **Bulletproofs**: Range proofs for private queries
-- **Groth16**: zk-SNARKs for complex statements
-- **Privacy Protection**: Query without revealing data
-- **Regulatory Compliance**: Prove compliance privately
-
-### 🌐 **Post-Quantum QUIC Transport**
-- **Quantum-Safe Channels**: ML-KEM + X25519 hybrid
-- **High Performance**: >10M packets/sec encryption
-- **Zero-Copy Operations**: Minimal memory overhead
-- **0-RTT Support**: Fast connection establishment
-
-### 🏦 **Advanced Database Security**
-- **Field-Level Encryption**: ChaCha20-Poly1305 AEAD
-- **Hybrid Signatures**: Ed25519 + ML-DSA verification
-- **Secure Key Derivation**: Table-specific encryption
-- **Audit Trail**: Blockchain-style transaction log
-
-### 🗃️ **Traditional Database Features**
-- **Embedded**: Zero-configuration, single-file database
-- **Fast**: B-tree storage with Write-Ahead Logging (WAL)
-- **Safe**: Memory-safe Zig implementation
-- **SQL**: CREATE, INSERT, SELECT, UPDATE, DELETE
-- **Portable**: File-based and in-memory databases
+| Feature | Status | Notes |
+|---------|--------|-------|
+| SQL Parser | ✅ Stable | CREATE, INSERT, SELECT, UPDATE, DELETE, JOIN |
+| B+ Tree Storage | ✅ Stable | Efficient indexing and retrieval |
+| Write-Ahead Log | ✅ Stable | Durability and crash recovery |
+| Page-based Storage | ✅ Stable | 4KB pages with buffer pool |
+| In-Memory Mode | ✅ Stable | Fast ephemeral databases |
+| File-based Mode | ✅ Stable | Persistent storage |
+| Interactive CLI | ✅ Stable | SQL shell with dot commands |
+| ChaCha20-Poly1305 | ✅ Stable | Field-level encryption |
+| Connection Pooling | ✅ Stable | Multi-connection support |
+| ML-KEM-768 | 🧪 Experimental | Post-quantum key exchange |
+| ML-DSA-65 | 🧪 Experimental | Post-quantum signatures |
+| Bulletproofs ZKP | 🧪 Experimental | Zero-knowledge proofs |
+| QUIC Transport | 🧪 Experimental | Network layer |
+| CNS Adapter | 🧪 Experimental | Ghostchain integration |
 
 ---
 
@@ -129,78 +112,66 @@ zig build run-powerdns
 ```zig
 const zqlite = @import("zqlite");
 
-// Create database with post-quantum security
-const conn = try zqlite.openWithSecurity("secure.db", "password");
+// Open a file-based database
+const conn = try zqlite.open(allocator, "mydata.db");
 defer conn.close();
 
-// Create encrypted table
-try conn.execute("CREATE TABLE users (id INTEGER, email TEXT ENCRYPTED);");
+// Create a table
+try conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);");
 
-// Insert with automatic encryption
-try conn.execute("INSERT INTO users VALUES (1, 'alice@example.com');");
+// Insert data
+try conn.execute("INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com');");
+
+// Query with results
+var result = try conn.query("SELECT * FROM users WHERE id = 1;");
+defer result.deinit();
+
+while (result.next()) |row| {
+    const name = row.getTextByName("name");
+    std.debug.print("User: {s}\n", .{name orelse "unknown"});
+}
 ```
 
-### Post-Quantum Cryptography
+### In-Memory Database
 ```zig
-const crypto = @import("zqlite").crypto;
+// Create an in-memory database (no file I/O)
+const conn = try zqlite.openMemory(allocator);
+defer conn.close();
 
-// Initialize with post-quantum features
-var engine = try crypto.CryptoEngine.initWithMasterKey(allocator, "password");
-defer engine.deinit();
-
-// Hybrid signature (classical + post-quantum)
-const signature = try engine.signTransaction("TRANSFER 1000 COINS");
-const valid = try engine.verifyTransaction("TRANSFER 1000 COINS", signature);
+// Use like any other database
+try conn.execute("CREATE TABLE temp (value INTEGER);");
+_ = try conn.exec("INSERT INTO temp VALUES (42);");
 ```
 
-### CNS Integration
+### Transactions
 ```zig
-const cns_adapter = @import("zqlite").cns_adapter;
+// Manual transaction control
+try conn.begin();
+errdefer conn.rollback() catch {};
 
-// Create CNS database for Ghostchain
-var cns_db = try cns_adapter.CNSDatabase.init(allocator, crypto_config);
-defer cns_db.deinit();
+try conn.execute("INSERT INTO accounts VALUES (1, 1000);");
+try conn.execute("INSERT INTO accounts VALUES (2, 500);");
 
-// Store Ghostchain address record
-const record = cns_adapter.CNSAdapter.CNSRecord{
-    .domain = "example.ghost",
-    .record_type = .GHOSTCHAIN_ADDR,
-    .value = "ghost1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
-    .signature = null,
-    .timestamp = std.time.timestamp(),
-};
-try cns_db.storeRecord(record);
-
-// Resolve Ghostchain address
-const address = cns_db.resolveGhostchainAddress("example.ghost");
+try conn.commit();
 ```
 
-### Zero-Knowledge Proofs
+### Prepared Statements
 ```zig
-// Enable ZKP features
-engine.enableZKP();
+// Prepare for repeated execution
+var stmt = try conn.prepare("INSERT INTO users (name, email) VALUES (?, ?);");
+defer stmt.deinit();
 
-// Create range proof (prove value in range without revealing it)
-const proof = try engine.createRangeProof(secret_amount, 1000, 100000);
-defer proof.deinit(allocator);
-
-// Verify proof without knowing the secret
-const valid = try engine.verifyRangeProof(proof, 1000, 100000);
+try stmt.bind(0, "Bob");
+try stmt.bind(1, "bob@example.com");
+_ = try stmt.execute();
 ```
 
-### Post-Quantum QUIC Transport
+### Experimental: Post-Quantum Crypto
+> ⚠️ These APIs are experimental and subject to change
+
 ```zig
-const transport = @import("zqlite").transport;
-
-// Create post-quantum QUIC database transport
-var db_transport = transport.PQDatabaseTransport.init(allocator, false);
-defer db_transport.deinit();
-
-// Connect with quantum-safe encryption
-const conn_id = try db_transport.transport.connect(server_addr);
-
-// Execute encrypted query over PQ-QUIC
-const result = try db_transport.executeQuery(conn_id, "SELECT * FROM accounts");
+// See src/crypto/ for experimental PQC features
+// These are proof-of-concept implementations
 ```
 
 ---

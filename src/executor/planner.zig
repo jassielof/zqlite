@@ -28,6 +28,7 @@ pub const Planner = struct {
             .Rollback => |*trans| try self.planRollback(trans),
             .CreateIndex => |*create_idx| try self.planCreateIndex(create_idx),
             .DropIndex => |*drop_idx| try self.planDropIndex(drop_idx),
+            .DropTable => |*drop_tbl| try self.planDropTable(drop_tbl),
             .With => |*with| try self.planWith(with), // Handle CTE
         };
     }
@@ -468,6 +469,23 @@ pub const Planner = struct {
         };
     }
 
+    /// Plan drop table statement
+    fn planDropTable(self: *Self, drop_tbl: *const ast.DropTableStatement) !ExecutionPlan {
+        var steps: std.ArrayList(ExecutionStep) = .{};
+
+        try steps.append(self.allocator, ExecutionStep{
+            .DropTable = DropTableStep{
+                .table_name = try self.allocator.dupe(u8, drop_tbl.table_name),
+                .if_exists = drop_tbl.if_exists,
+            },
+        });
+
+        return ExecutionPlan{
+            .steps = try steps.toOwnedSlice(self.allocator),
+            .allocator = self.allocator,
+        };
+    }
+
     /// Clone a condition (deep copy)
     fn cloneCondition(self: *Self, condition: *const ast.Condition) !ast.Condition {
         return switch (condition.*) {
@@ -670,6 +688,7 @@ pub const ExecutionStep = union(enum) {
     Rollback,
     CreateIndex: CreateIndexStep,
     DropIndex: DropIndexStep,
+    DropTable: DropTableStep,
     // CreateCTE: CreateCTEStep, // TODO: Add CTE support in future version
 
     pub fn deinit(self: *ExecutionStep, allocator: std.mem.Allocator) void {
@@ -691,6 +710,7 @@ pub const ExecutionStep = union(enum) {
             .Rollback => {},
             .CreateIndex => |*step| step.deinit(allocator),
             .DropIndex => |*step| step.deinit(allocator),
+            .DropTable => |*step| step.deinit(allocator),
             // .CreateCTE => |*step| step.deinit(allocator), // TODO: Add CTE support
         }
     }
@@ -839,6 +859,16 @@ pub const DropIndexStep = struct {
 
     pub fn deinit(self: *DropIndexStep, allocator: std.mem.Allocator) void {
         allocator.free(self.index_name);
+    }
+};
+
+/// Drop table step
+pub const DropTableStep = struct {
+    table_name: []const u8,
+    if_exists: bool,
+
+    pub fn deinit(self: *DropTableStep, allocator: std.mem.Allocator) void {
+        allocator.free(self.table_name);
     }
 };
 

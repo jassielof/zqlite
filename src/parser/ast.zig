@@ -12,6 +12,7 @@ pub const Statement = union(enum) {
     Rollback: TransactionStatement,
     CreateIndex: CreateIndexStatement,
     DropIndex: DropIndexStatement,
+    DropTable: DropTableStatement,
     // PostgreSQL compatibility statements
     With: WithStatement, // Common Table Expressions
 
@@ -27,6 +28,7 @@ pub const Statement = union(enum) {
             .Rollback => |*stmt| stmt.deinit(allocator),
             .CreateIndex => |*stmt| stmt.deinit(allocator),
             .DropIndex => |*stmt| stmt.deinit(allocator),
+            .DropTable => |*stmt| stmt.deinit(allocator),
             .With => |*stmt| stmt.deinit(allocator),
         }
     }
@@ -580,6 +582,16 @@ pub const DropIndexStatement = struct {
 
     pub fn deinit(self: *DropIndexStatement, allocator: std.mem.Allocator) void {
         allocator.free(self.index_name);
+    }
+};
+
+/// Drop table statement
+pub const DropTableStatement = struct {
+    table_name: []const u8,
+    if_exists: bool,
+
+    pub fn deinit(self: *DropTableStatement, allocator: std.mem.Allocator) void {
+        allocator.free(self.table_name);
     }
 };
 

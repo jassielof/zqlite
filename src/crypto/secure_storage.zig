@@ -48,23 +48,59 @@ pub const CryptoEngine = struct {
         self.* = undefined;
     }
 
-    /// Hash password for storage using Argon2
+    /// Hash password for storage using Argon2 with random salt.
+    /// Returns 80 bytes: 16 bytes salt + 64 bytes hash
     pub fn hashPassword(self: *Self, password: []const u8) ![]u8 {
-        const result = try self.allocator.alloc(u8, 64);
+        const salt_len = 16;
+        const hash_len = 64;
+        const result = try self.allocator.alloc(u8, salt_len + hash_len);
+        errdefer self.allocator.free(result);
 
-        // Use std.crypto Argon2
-        const salt = "ZQLiteV1Salt";
-        try std.crypto.pwhash.argon2.kdf(self.allocator, result, password, salt, .{ .t = 3, .m = 12, .p = 1 }, // Time cost 3, Memory cost 4096, Parallelism 1
-            .argon2id);
+        // Generate random salt
+        var salt: [salt_len]u8 = undefined;
+        std.crypto.random.bytes(&salt);
+        @memcpy(result[0..salt_len], &salt);
+
+        // Use std.crypto Argon2 with random salt
+        try std.crypto.pwhash.argon2.kdf(
+            self.allocator,
+            result[salt_len..],
+            password,
+            &salt,
+            .{ .t = 3, .m = 12, .p = 1 }, // Time cost 3, Memory cost 4096, Parallelism 1
+            .argon2id,
+        );
 
         return result;
     }
 
-    /// Verify password against stored hash
+    /// Verify password against stored hash (salt + hash format)
     pub fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
-        const computed_hash = try self.hashPassword(password);
+        const salt_len = 16;
+        const hash_len = 64;
+
+        if (stored_hash.len != salt_len + hash_len) {
+            return error.InvalidHashFormat;
+        }
+
+        // Extract salt from stored hash
+        const salt = stored_hash[0..salt_len];
+
+        // Compute hash with same salt
+        const computed_hash = try self.allocator.alloc(u8, hash_len);
         defer self.allocator.free(computed_hash);
-        return std.mem.eql(u8, computed_hash, stored_hash);
+
+        try std.crypto.pwhash.argon2.kdf(
+            self.allocator,
+            computed_hash,
+            password,
+            salt,
+            .{ .t = 3, .m = 12, .p = 1 },
+            .argon2id,
+        );
+
+        // Constant-time comparison to prevent timing attacks
+        return std.crypto.timing_safe.eql([hash_len]u8, stored_hash[salt_len..][0..hash_len].*, computed_hash[0..hash_len].*);
     }
 
     /// Generate secure random token
@@ -74,10 +110,15 @@ pub const CryptoEngine = struct {
         return token;
     }
 
-    /// Enable post-quantum only mode (placeholder)
+    /// Enable post-quantum only mode.
+    /// Note: Full post-quantum support requires the Shroud backend.
+    /// This enables hybrid mode flag which uses PQ algorithms where available.
     pub fn enablePostQuantumOnlyMode(self: *Self) void {
-        _ = self;
-        // TODO: Switch to post-quantum crypto only
+        self.hybrid_mode = true;
+        // When Shroud backend is integrated, this will switch to PQ-only algorithms:
+        // - ML-KEM-768 for key encapsulation
+        // - ML-DSA-65 for digital signatures
+        // For now, hybrid_mode flag signals intent to use PQ when available
     }
 
     /// Derive master key from password using HKDF
@@ -223,12 +264,9 @@ pub const CryptoEngine = struct {
     }
 
     /// Decrypt a field (convenience method for small data)
+    /// Expects data in format: nonce (12 bytes) + ciphertext + tag (16 bytes)
     pub fn decryptField(self: *Self, encrypted_data: []const u8) ![]u8 {
-        // This is a simplified implementation
-        // In production, you'd parse the encrypted format properly
-        const decrypted = try self.allocator.alloc(u8, encrypted_data.len);
-        @memcpy(decrypted, encrypted_data); // Simplified for demo
-        return decrypted;
+        return self.decrypt(encrypted_data);
     }
 
     /// Enable zero-knowledge proofs (if backend supports it)
@@ -264,29 +302,81 @@ pub const CryptoEngine = struct {
         return std.mem.eql(u8, signature, &hash);
     }
 
-    /// Generate range proof for zero-knowledge proofs
+    /// Generate range proof for zero-knowledge proofs.
+    /// Creates a simple commitment-based range proof (not cryptographically complete -
+    /// for production use, integrate a proper Bulletproofs or similar library).
+    ///
+    /// Proof format: commitment (32 bytes) + blinding factor hash (32 bytes) + value bounds hash (32 bytes)
     pub fn createRangeProof(self: *Self, value: u64, min_value: u64, max_value: u64) ![]u8 {
-        _ = self;
-        _ = value;
-        _ = min_value;
-        _ = max_value;
+        // Validate range
+        if (value < min_value or value > max_value) {
+            return error.ValueOutOfRange;
+        }
 
-        // Mock implementation - return dummy proof
-        const allocator = std.heap.page_allocator;
-        const proof = try allocator.alloc(u8, 256);
-        @memset(proof, 0x42); // Fill with dummy data
+        const proof = try self.allocator.alloc(u8, 96);
+        errdefer self.allocator.free(proof);
+
+        // Generate blinding factor
+        var blinding: [32]u8 = undefined;
+        std.crypto.random.bytes(&blinding);
+
+        // Create commitment: H(value || blinding)
+        var commitment_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var value_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &value_bytes, value, .little);
+        commitment_hasher.update(&value_bytes);
+        commitment_hasher.update(&blinding);
+        commitment_hasher.final(proof[0..32]);
+
+        // Store blinding factor hash (for verification without revealing blinding)
+        var blinding_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        blinding_hasher.update(&blinding);
+        blinding_hasher.update("zkp_blinding_v1");
+        blinding_hasher.final(proof[32..64]);
+
+        // Store range bounds hash
+        var bounds_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var min_bytes: [8]u8 = undefined;
+        var max_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &min_bytes, min_value, .little);
+        std.mem.writeInt(u64, &max_bytes, max_value, .little);
+        bounds_hasher.update(&min_bytes);
+        bounds_hasher.update(&max_bytes);
+        bounds_hasher.update(proof[0..32]); // Include commitment
+        bounds_hasher.final(proof[64..96]);
+
         return proof;
     }
 
-    /// Verify range proof for zero-knowledge proofs
+    /// Verify range proof for zero-knowledge proofs.
+    /// Note: This is a simplified verification - full ZKP verification requires
+    /// the original value or additional proof components.
     pub fn verifyRangeProof(self: *Self, proof: []const u8, min_value: u64, max_value: u64) !bool {
         _ = self;
-        _ = proof;
-        _ = min_value;
-        _ = max_value;
 
-        // Mock implementation - always return true for demo
-        return true;
+        // Validate proof format
+        if (proof.len != 96) {
+            return error.InvalidProofFormat;
+        }
+
+        // Verify bounds hash matches the claimed range
+        const commitment = proof[0..32];
+        const stored_bounds_hash = proof[64..96];
+
+        var bounds_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var min_bytes: [8]u8 = undefined;
+        var max_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &min_bytes, min_value, .little);
+        std.mem.writeInt(u64, &max_bytes, max_value, .little);
+        bounds_hasher.update(&min_bytes);
+        bounds_hasher.update(&max_bytes);
+        bounds_hasher.update(commitment);
+
+        var computed_bounds_hash: [32]u8 = undefined;
+        bounds_hasher.final(&computed_bounds_hash);
+
+        // Verify bounds hash matches (constant-time comparison)
+        return std.crypto.timing_safe.eql([32]u8, stored_bounds_hash[0..32].*, computed_bounds_hash);
     }
 };
 

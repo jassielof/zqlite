@@ -49,7 +49,7 @@ test "Query Validation - Complex SELECT Statements" {
     );
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 3);
@@ -95,7 +95,7 @@ test "Query Validation - Subqueries and Window Functions" {
     );
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     // Should return laptops and potentially some phones
@@ -130,7 +130,7 @@ test "Query Validation - Date and Time Functions" {
     );
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 2);
@@ -176,7 +176,7 @@ test "Query Validation - Transaction Integrity" {
     var stmt = try conn.prepare("SELECT name, balance FROM accounts ORDER BY name");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 2);
@@ -218,7 +218,7 @@ test "Query Validation - Error Handling and Edge Cases" {
     var stmt = try conn.prepare("SELECT COUNT(*) FROM test_table");
     defer stmt.deinit();
 
-    var query_result = try stmt.execute(conn);
+    var query_result = try stmt.execute();
     defer query_result.deinit(allocator);
 
     switch (query_result.rows.items[0].values[0]) {
@@ -261,7 +261,7 @@ test "Query Validation - Index Performance" {
     var stmt = try conn.prepare("SELECT COUNT(*) FROM indexed_table WHERE id < 50");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     switch (result.rows.items[0].values[0]) {
@@ -297,7 +297,7 @@ test "Query Validation - NULL Handling" {
     var stmt1 = try conn.prepare("SELECT COUNT(*) FROM null_test WHERE optional_field IS NULL");
     defer stmt1.deinit();
 
-    var result1 = try stmt1.execute(conn);
+    var result1 = try stmt1.execute();
     defer result1.deinit(allocator);
 
     switch (result1.rows.items[0].values[0]) {
@@ -308,7 +308,7 @@ test "Query Validation - NULL Handling" {
     var stmt2 = try conn.prepare("SELECT COUNT(*) FROM null_test WHERE optional_field IS NOT NULL");
     defer stmt2.deinit();
 
-    var result2 = try stmt2.execute(conn);
+    var result2 = try stmt2.execute();
     defer result2.deinit(allocator);
 
     switch (result2.rows.items[0].values[0]) {

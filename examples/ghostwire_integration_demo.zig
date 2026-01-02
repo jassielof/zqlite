@@ -114,7 +114,7 @@ fn demonstratePeerRegistration(conn: *zqlite.Connection) !void {
         try stmt.bind(3, now);
         try stmt.bind(4, peer.metadata);
 
-        _ = try stmt.execute(conn);
+        _ = try stmt.execute();
         std.debug.print("   ✓ Registered peer: {s}\n", .{peer.id});
     }
 

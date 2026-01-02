@@ -42,7 +42,7 @@ pub fn main() !void {
         defer allocator.free(product.category);
         try stmt.bindParameter(3, zqlite.storage.Value{ .Real = product.price });
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit();
     }
 

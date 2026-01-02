@@ -27,6 +27,11 @@ pub const Connection = struct {
         conn.path = try allocator.dupe(u8, path);
         conn.owns_storage = true;
 
+        // Replay WAL on startup to recover any uncommitted changes
+        if (conn.wal) |w| {
+            try w.checkpointToPager(conn.storage_engine.pager);
+        }
+
         return conn;
     }
 
@@ -82,6 +87,8 @@ pub const Connection = struct {
     pub fn commitTransaction(self: *Self) !void {
         if (self.wal) |w| {
             try w.commit();
+            // Checkpoint WAL to apply changes to the main database file
+            try w.checkpointToPager(self.storage_engine.pager);
         }
     }
 
@@ -268,12 +275,15 @@ pub const Connection = struct {
 
     /// Close the database connection
     pub fn close(self: *Self) void {
+        // Checkpoint any remaining WAL entries before closing
         if (self.wal) |w| {
+            w.checkpointToPager(self.storage_engine.pager) catch {};
             w.deinit();
         }
 
-        // Only deinit storage if this connection owns it
+        // Flush pager to ensure all data is written to disk
         if (self.owns_storage) {
+            self.storage_engine.pager.flush() catch {};
             self.storage_engine.deinit();
         }
 
@@ -586,6 +596,7 @@ pub const ColumnInfo = struct {
 /// Prepared statement for optimized execution
 pub const PreparedStatement = struct {
     allocator: std.mem.Allocator,
+    connection: *Connection,
     sql: []const u8,
     parsed_statement: ast.Statement,
     execution_plan: planner.ExecutionPlan,
@@ -596,9 +607,9 @@ pub const PreparedStatement = struct {
 
     /// Prepare a SQL statement
     pub fn prepare(allocator: std.mem.Allocator, connection: *Connection, sql: []const u8) !*Self {
-        _ = connection; // Will be used for validation in the future
         var stmt = try allocator.create(Self);
         stmt.allocator = allocator;
+        stmt.connection = connection;
         stmt.sql = try allocator.dupe(u8, sql);
 
         // Parse the SQL
@@ -667,7 +678,13 @@ pub const PreparedStatement = struct {
     }
 
     /// Execute the prepared statement
-    pub fn execute(self: *Self, connection: *Connection) !vm.ExecutionResult {
+    pub fn execute(self: *Self) !vm.ExecutionResult {
+        var virtual_machine = vm.VirtualMachine.init(self.connection.allocator, self.connection);
+        return virtual_machine.executeWithParameters(&self.execution_plan, self.parameters);
+    }
+
+    /// Execute the prepared statement with explicit connection (for backwards compatibility)
+    pub fn executeWithConnection(self: *Self, connection: *Connection) !vm.ExecutionResult {
         var virtual_machine = vm.VirtualMachine.init(connection.allocator, connection);
         return virtual_machine.executeWithParameters(&self.execution_plan, self.parameters);
     }

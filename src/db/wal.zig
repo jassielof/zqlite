@@ -127,14 +127,24 @@ pub const WriteAheadLog = struct {
     }
 
     /// Checkpoint - apply WAL changes to main database
+    /// This reads all committed transactions from the WAL and applies their
+    /// page writes to the target pager, then truncates the WAL.
     pub fn checkpoint(self: *Self) !void {
+        try self.checkpointToPager(null);
+    }
+
+    /// Checkpoint with a specific pager target
+    pub fn checkpointToPager(self: *Self, target_pager: ?*@import("pager.zig").Pager) !void {
         if (self.is_transaction_active) {
             return error.TransactionActive;
         }
 
-        // Read WAL file and apply all committed transactions
         const file_size = try self.file.getEndPos();
         if (file_size == 0) return; // No data to checkpoint
+
+        // First pass: collect all committed transaction IDs
+        var committed_transactions = std.AutoHashMap(u64, void).init(self.allocator);
+        defer committed_transactions.deinit();
 
         _ = try self.file.seekTo(0);
         var buffer: [8192]u8 = undefined;
@@ -146,27 +156,59 @@ pub const WriteAheadLog = struct {
             if (bytes_read == 0) break;
 
             var buffer_pos: usize = 0;
-
-            while (buffer_pos < bytes_read) {
+            while (buffer_pos + 25 <= bytes_read) {
                 const entry = LogEntry.deserialize(self.allocator, buffer[buffer_pos..]) catch break;
                 defer {
                     self.allocator.free(entry.old_data);
                     self.allocator.free(entry.new_data);
                 }
 
-                // Apply committed changes to main database
                 if (entry.entry_type == .Commit) {
-                    // This would write the transaction's changes to the main database file
-                    // For now, just log that we're checkpointing
-                    std.debug.print("Checkpointing transaction {d}\n", .{entry.transaction_id});
+                    try committed_transactions.put(entry.transaction_id, {});
                 }
 
-                // Skip to next entry
                 const entry_size = try self.getEntrySize(&entry);
                 buffer_pos += entry_size;
             }
-
             position += bytes_read;
+        }
+
+        // Second pass: apply page writes from committed transactions
+        if (target_pager) |pager_inst| {
+            _ = try self.file.seekTo(0);
+            position = 0;
+
+            while (position < file_size) {
+                _ = try self.file.seekTo(position);
+                const bytes_read = try self.file.read(buffer[0..]);
+                if (bytes_read == 0) break;
+
+                var buffer_pos: usize = 0;
+                while (buffer_pos + 25 <= bytes_read) {
+                    const entry = LogEntry.deserialize(self.allocator, buffer[buffer_pos..]) catch break;
+                    defer {
+                        self.allocator.free(entry.old_data);
+                        self.allocator.free(entry.new_data);
+                    }
+
+                    // Apply page writes from committed transactions
+                    if (entry.entry_type == .PageWrite and committed_transactions.contains(entry.transaction_id)) {
+                        const page = try pager_inst.getPage(entry.page_id);
+                        const end_offset = entry.offset + @as(u32, @intCast(entry.new_data.len));
+                        if (end_offset <= page.data.len) {
+                            @memcpy(page.data[entry.offset..end_offset], entry.new_data);
+                            try pager_inst.markDirty(entry.page_id);
+                        }
+                    }
+
+                    const entry_size = try self.getEntrySize(&entry);
+                    buffer_pos += entry_size;
+                }
+                position += bytes_read;
+            }
+
+            // Flush all dirty pages to disk
+            try pager_inst.flush();
         }
 
         // Truncate WAL file after successful checkpoint

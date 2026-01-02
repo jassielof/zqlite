@@ -174,7 +174,7 @@ pub fn main() !void {
     try stmt.bindParameter(4, zqlite.storage.Value{ .Text = param_categories });
     defer allocator.free(param_categories);
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit();
 
     std.debug.print("✅ Inserted product with array columns\n", .{});

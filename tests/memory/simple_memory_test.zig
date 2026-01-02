@@ -68,7 +68,7 @@ fn testDefaultTimestamp(allocator: std.mem.Allocator) !void {
         var stmt = try conn.prepare("SELECT id, name, created_at FROM events WHERE id < 3");
         defer stmt.deinit();
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit();
 
         if (result.rows.items.len != 3) {
@@ -104,7 +104,7 @@ fn testBasicCrud(allocator: std.mem.Allocator) !void {
     var stmt = try conn.prepare("SELECT COUNT(*) FROM users");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     switch (result.rows.items[0].values[0]) {
@@ -120,7 +120,7 @@ fn testBasicCrud(allocator: std.mem.Allocator) !void {
     var stmt2 = try conn.prepare("SELECT COUNT(*) FROM users");
     defer stmt2.deinit();
 
-    var result2 = try stmt2.execute(conn);
+    var result2 = try stmt2.execute();
     defer result2.deinit(allocator);
 
     switch (result2.rows.items[0].values[0]) {
@@ -153,7 +153,7 @@ fn testMultipleConnections(allocator: std.mem.Allocator) !void {
         var stmt = try conn.prepare("SELECT COUNT(*) FROM test");
         defer stmt.deinit();
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit();
 
         switch (result.rows.items[0].values[0]) {
@@ -191,7 +191,7 @@ fn testPreparedStatements(allocator: std.mem.Allocator) !void {
 
     var round: u32 = 0;
     while (round < 5) : (round += 1) {
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit();
 
         switch (result.rows.items[0].values[0]) {

@@ -23,7 +23,7 @@ test "SQLite Basic CRUD Operations" {
     var stmt = try conn.prepare("SELECT COUNT(*) FROM users");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 1);
@@ -58,7 +58,7 @@ test "SQLite Data Types Support" {
     var stmt = try conn.prepare("SELECT text_col, real_col, null_col FROM type_test WHERE id = 1");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 1);
@@ -102,7 +102,7 @@ test "SQLite WHERE Clauses and Filtering" {
     var stmt = try conn.prepare("SELECT name FROM products WHERE price > 500");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 2); // Laptop and Phone
@@ -111,7 +111,7 @@ test "SQLite WHERE Clauses and Filtering" {
     var stmt2 = try conn.prepare("SELECT name FROM products WHERE category = 'Electronics'");
     defer stmt2.deinit();
 
-    var result2 = try stmt2.execute(conn);
+    var result2 = try stmt2.execute();
     defer result2.deinit(allocator);
 
     try testing.expect(result2.rows.items.len == 2); // Laptop and Phone
@@ -136,7 +136,7 @@ test "SQLite UPDATE and DELETE Operations" {
     var stmt = try conn.prepare("SELECT quantity FROM inventory WHERE item = 'Apples'");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 1);
@@ -151,7 +151,7 @@ test "SQLite UPDATE and DELETE Operations" {
     var stmt2 = try conn.prepare("SELECT COUNT(*) FROM inventory");
     defer stmt2.deinit();
 
-    var result2 = try stmt2.execute(conn);
+    var result2 = try stmt2.execute();
     defer result2.deinit(allocator);
 
     switch (result2.rows.items[0].values[0]) {
@@ -188,7 +188,7 @@ test "SQLite JOINS" {
     );
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 2); // Alice has 2 orders
@@ -212,7 +212,7 @@ test "SQLite GROUP BY and Aggregation" {
     var stmt = try conn.prepare("SELECT region, SUM(amount) as total FROM sales GROUP BY region ORDER BY region");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 2);
@@ -241,7 +241,7 @@ test "SQLite DEFAULT CURRENT_TIMESTAMP" {
     var stmt = try conn.prepare("SELECT name, created_at FROM events WHERE id = 1");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 1);

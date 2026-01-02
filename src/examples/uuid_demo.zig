@@ -51,7 +51,7 @@ pub fn main() !void {
         defer allocator.free(user_name);
         try stmt.bindParameter(1, zqlite.storage.Value{ .Text = user_name });
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit();
 
         std.debug.print("  ✅ UUID stored in database\n\n", .{});

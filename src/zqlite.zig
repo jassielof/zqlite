@@ -119,6 +119,10 @@ pub const build_info = version.FULL_VERSION_STRING ++ " [" ++ build_options.prof
 
 // Main API functions
 pub fn open(allocator: std.mem.Allocator, path: []const u8) !*db.Connection {
+    // Handle special :memory: path for in-memory databases
+    if (std.mem.eql(u8, path, ":memory:")) {
+        return db.Connection.openMemory(allocator);
+    }
     return db.Connection.open(allocator, path);
 }
 

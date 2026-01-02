@@ -44,7 +44,7 @@ pub fn main() !void {
     };
     defer stmt.deinit();
 
-    var result = stmt.execute(conn) catch |err| {
+    var result = stmt.execute() catch |err| {
         std.debug.print("FAILED ({})\n", .{err});
         return err;
     };
@@ -78,7 +78,7 @@ pub fn main() !void {
     };
     defer count_stmt.deinit();
 
-    var count_result = count_stmt.execute(conn) catch |err| {
+    var count_result = count_stmt.execute() catch |err| {
         std.debug.print("FAILED ({})\n", .{err});
         return err;
     };

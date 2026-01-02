@@ -106,7 +106,7 @@ pub fn main() !void {
     std.debug.print("✅ Successfully bound parameters with auto-type detection\n", .{});
 
     // Execute the prepared statement
-    var result = stmt.execute(conn) catch |err| {
+    var result = stmt.execute() catch |err| {
         std.debug.print("❌ Failed to execute prepared statement: {}\n", .{err});
         return;
     };

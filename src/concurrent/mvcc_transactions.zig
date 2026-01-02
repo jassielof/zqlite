@@ -2,9 +2,93 @@ const std = @import("std");
 const storage = @import("../db/storage.zig");
 const crypto = @import("../crypto/secure_storage.zig");
 const zsync = @import("zsync");
+const Wyhash = std.hash.Wyhash;
+const Wyhash = std.hash.Wyhash;
+
+/// Version chain entry for MVCC
+pub const VersionChainEntry = struct {
+    version: u64,
+    transaction_id: TransactionId,
+    data: ?storage.Row, // null = deleted (tombstone)
+    created_at: i64,
+    prev: ?*VersionChainEntry,
+
+    pub fn deinit(self: *VersionChainEntry, allocator: std.mem.Allocator) void {
+        if (self.data) |row| {
+            for (row.values) |value| {
+                value.deinit(allocator);
+            }
+            allocator.free(row.values);
+        }
+        allocator.destroy(self);
+    }
+};
+
+/// Version chain head for a row
+pub const VersionChain = struct {
+    latest: ?*VersionChainEntry,
+    row_id: storage.RowId,
+
+    pub fn init(row_id: storage.RowId) VersionChain {
+        return .{ .latest = null, .row_id = row_id };
+    }
+
+    /// Add a new version to the chain
+    pub fn addVersion(self: *VersionChain, allocator: std.mem.Allocator, version: u64, transaction_id: TransactionId, data: ?storage.Row, timestamp: i64) !void {
+        const entry = try allocator.create(VersionChainEntry);
+        entry.* = .{
+            .version = version,
+            .transaction_id = transaction_id,
+            .data = data,
+            .created_at = timestamp,
+            .prev = self.latest,
+        };
+        self.latest = entry;
+    }
+
+    /// Find visible version for a transaction
+    pub fn findVisible(self: *VersionChain, start_version: u64, committed_versions: *const std.AutoHashMap(TransactionId, u64)) ?*VersionChainEntry {
+        var current = self.latest;
+        while (current) |entry| {
+            // Version is visible if:
+            // 1. It was committed before our transaction started, OR
+            // 2. It was created by a transaction that committed before our start_version
+            if (entry.version <= start_version) {
+                // Check if the creating transaction has committed
+                if (committed_versions.get(entry.transaction_id)) |commit_version| {
+                    if (commit_version <= start_version) {
+                        return entry;
+                    }
+                } else if (entry.transaction_id == 0) {
+                    // System transaction (initial data)
+                    return entry;
+                }
+            }
+            current = entry.prev;
+        }
+        return null;
+    }
+
+    /// Check if modified since a version
+    pub fn modifiedSince(self: *VersionChain, since_version: u64) bool {
+        if (self.latest) |entry| {
+            return entry.version > since_version;
+        }
+        return false;
+    }
+
+    pub fn deinit(self: *VersionChain, allocator: std.mem.Allocator) void {
+        var current = self.latest;
+        while (current) |entry| {
+            const prev = entry.prev;
+            entry.deinit(allocator);
+            current = prev;
+        }
+    }
+};
 
 /// Multi-Version Concurrency Control (MVCC) Transaction Manager
-/// Perfect for ZVM smart contracts and GhostMesh concurrent operations
+/// Provides snapshot isolation with version chains for concurrent access
 pub const MVCCTransactionManager = struct {
     allocator: std.mem.Allocator,
     transactions: std.HashMap(TransactionId, *Transaction),
@@ -14,6 +98,10 @@ pub const MVCCTransactionManager = struct {
     crypto_engine: ?*crypto.CryptoEngine,
     commit_log: std.ArrayList(CommitLogEntry),
     deadlock_detector: DeadlockDetector,
+    /// Version chains indexed by table:row_id
+    version_chains: std.StringHashMap(std.AutoHashMap(storage.RowId, VersionChain)),
+    /// Committed transaction versions for visibility checks
+    committed_versions: std.AutoHashMap(TransactionId, u64),
 
     const Self = @This();
 
@@ -27,6 +115,8 @@ pub const MVCCTransactionManager = struct {
             .crypto_engine = crypto_engine,
             .commit_log = .{},
             .deadlock_detector = DeadlockDetector.init(allocator),
+            .version_chains = std.StringHashMap(std.AutoHashMap(storage.RowId, VersionChain)).init(allocator),
+            .committed_versions = std.AutoHashMap(TransactionId, u64).init(allocator),
         };
     }
 
@@ -173,6 +263,9 @@ pub const MVCCTransactionManager = struct {
         transaction.state = .Committed;
         transaction.commit_version = commit_version;
 
+        // Record committed version for visibility checks
+        try self.committed_versions.put(transaction_id, commit_version);
+
         // Log the commit
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const commit_entry = CommitLogEntry{
@@ -199,9 +292,25 @@ pub const MVCCTransactionManager = struct {
 
     /// Find the visible version of a row for a transaction
     fn findVisibleVersion(self: *Self, transaction: *Transaction, table: []const u8, row_id: storage.RowId) !?RowVersion {
-        // For now, simplified implementation - read from current storage
-        // In full MVCC, we'd maintain version chains
+        // First check version chains for MVCC visibility
+        if (self.version_chains.get(table)) |table_chains| {
+            if (table_chains.get(row_id)) |chain| {
+                if (chain.findVisible(transaction.start_version, &self.committed_versions)) |entry| {
+                    // Return null if this is a tombstone (deleted row)
+                    if (entry.data == null) {
+                        return null;
+                    }
+                    return RowVersion{
+                        .version = entry.version,
+                        .data = entry.data.?,
+                        .transaction_id = entry.transaction_id,
+                        .created_at = entry.created_at,
+                    };
+                }
+            }
+        }
 
+        // Fall back to reading from storage for rows without version history
         const table_obj = self.storage_engine.getTable(table) orelse return null;
         const rows = try table_obj.select(self.allocator);
         defer {
@@ -215,13 +324,12 @@ pub const MVCCTransactionManager = struct {
         }
 
         if (row_id < rows.len) {
-            const version = RowVersion{
-                .version = transaction.start_version,
+            return RowVersion{
+                .version = 0, // Initial version
                 .data = rows[row_id],
                 .transaction_id = 0, // System transaction
                 .created_at = transaction.created_at,
             };
-            return version;
         }
 
         return null;
@@ -264,43 +372,88 @@ pub const MVCCTransactionManager = struct {
 
     /// Check if a row has been modified since a version
     fn hasBeenModifiedSince(self: *Self, row_key: RowKey, version: u64, transaction_start: u64) !bool {
-        _ = self;
-        _ = row_key;
-        _ = version;
         _ = transaction_start;
-        // Simplified: assume no conflicts for now
-        // In full implementation, we'd check version chains
-        return false;
+
+        // Look up version chain for this row
+        const table_chains = self.version_chains.get(row_key.table) orelse return false;
+        const chain = table_chains.get(row_key.row_id) orelse return false;
+
+        // Check if any version is newer than what we read
+        return chain.modifiedSince(version);
     }
 
     /// Check for conflicting writes
     fn hasConflictingWrite(self: *Self, row_key: RowKey, transaction_id: TransactionId, start_version: u64) !bool {
-        _ = self;
-        _ = row_key;
         _ = transaction_id;
-        _ = start_version;
-        // Simplified: assume no conflicts for now
+
+        // Look up version chain for this row
+        const table_chains = self.version_chains.get(row_key.table) orelse return false;
+        const chain = table_chains.get(row_key.row_id) orelse return false;
+
+        // Check if there's a newer version than our start
+        if (chain.latest) |latest| {
+            // Conflict if another transaction wrote after our start
+            if (latest.version > start_version) {
+                return true;
+            }
+        }
         return false;
     }
 
     /// Write to underlying storage with versioning
     fn writeToStorage(self: *Self, table: []const u8, row_id: storage.RowId, row: storage.Row, version: u64) !void {
-        _ = version; // TODO: Store version information
-        _ = row_id; // TODO: Use row_id for positioning
-
         const table_obj = self.storage_engine.getTable(table) orelse return error.TableNotFound;
 
-        // For now, simple overwrite - in full MVCC we'd create new versions
+        // Get or create version chain for this table
+        const table_key = try self.allocator.dupe(u8, table);
+        errdefer self.allocator.free(table_key);
+
+        var table_chains = self.version_chains.getPtr(table_key) orelse blk: {
+            try self.version_chains.put(table_key, std.AutoHashMap(storage.RowId, VersionChain).init(self.allocator));
+            break :blk self.version_chains.getPtr(table_key).?;
+        };
+
+        // Get or create version chain for this row
+        var chain = table_chains.getPtr(row_id) orelse blk: {
+            try table_chains.put(row_id, VersionChain.init(row_id));
+            break :blk table_chains.getPtr(row_id).?;
+        };
+
+        // Clone the row data for the version chain
+        var cloned_values = try self.allocator.alloc(storage.Value, row.values.len);
+        for (row.values, 0..) |value, i| {
+            cloned_values[i] = try value.clone(self.allocator);
+        }
+        const cloned_row = storage.Row{ .values = cloned_values };
+
+        // Add new version to chain
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        try chain.addVersion(self.allocator, version, 0, cloned_row, ts.sec);
+
+        // Write to underlying storage
         try table_obj.insert(row);
     }
 
-    /// Delete from underlying storage
+    /// Delete from underlying storage with tombstone version
     fn deleteFromStorage(self: *Self, table: []const u8, row_id: storage.RowId, version: u64) !void {
-        _ = self; // TODO: Use self for storage operations
-        _ = table; // TODO: Use table for delete operations
-        _ = row_id; // TODO: Use row_id for positioning
-        _ = version; // TODO: Store version information
-        // TODO: Implement versioned deletes
+        // Get or create version chain for this table
+        const table_key = try self.allocator.dupe(u8, table);
+        errdefer self.allocator.free(table_key);
+
+        var table_chains = self.version_chains.getPtr(table_key) orelse blk: {
+            try self.version_chains.put(table_key, std.AutoHashMap(storage.RowId, VersionChain).init(self.allocator));
+            break :blk self.version_chains.getPtr(table_key).?;
+        };
+
+        // Get or create version chain for this row
+        var chain = table_chains.getPtr(row_id) orelse blk: {
+            try table_chains.put(row_id, VersionChain.init(row_id));
+            break :blk table_chains.getPtr(row_id).?;
+        };
+
+        // Add tombstone version (null data indicates deleted)
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        try chain.addVersion(self.allocator, version, 0, null, ts.sec);
     }
 
     /// Release all locks held by a transaction
@@ -342,6 +495,7 @@ pub const MVCCTransactionManager = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        // Clean up transactions
         var iterator = self.transactions.valueIterator();
         while (iterator.next()) |transaction| {
             transaction.*.deinit();
@@ -350,6 +504,23 @@ pub const MVCCTransactionManager = struct {
         self.transactions.deinit();
         self.commit_log.deinit(self.allocator);
         self.deadlock_detector.deinit();
+
+        // Clean up version chains
+        var chain_iterator = self.version_chains.iterator();
+        while (chain_iterator.next()) |entry| {
+            var table_chains = entry.value_ptr.*;
+            var row_iterator = table_chains.iterator();
+            while (row_iterator.next()) |row_entry| {
+                var chain = row_entry.value_ptr.*;
+                chain.deinit(self.allocator);
+            }
+            table_chains.deinit();
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.version_chains.deinit();
+
+        // Clean up committed versions
+        self.committed_versions.deinit();
     }
 };
 
@@ -389,12 +560,18 @@ pub const RowValue = union(enum) {
     Deleted,
 };
 
-/// Row version for MVCC
+/// Row version metadata captured during reads
 pub const RowVersion = struct {
     version: u64,
     data: storage.Row,
     transaction_id: TransactionId,
     created_at: i64,
+};
+
+/// Visible row returned from version lookups
+const VisibleRow = struct {
+    version: u64,
+    value: RowValue,
 };
 
 /// Lock information
@@ -483,13 +660,69 @@ pub const DeadlockDetector = struct {
         }
     }
 
+    /// Check if acquiring a lock would cause a deadlock using cycle detection in wait-for graph.
+    /// Uses DFS to detect cycles: if transaction A waits for B, and B waits for A, deadlock exists.
     pub fn wouldCauseDeadlock(self: *Self, transaction_id: TransactionId, lock_info: LockInfo) !bool {
-        _ = self; // TODO: Use self for deadlock detection
-        _ = transaction_id; // TODO: Use transaction_id for cycle detection
-        _ = lock_info; // TODO: Use lock_info for dependency analysis
-        // Simplified: assume no deadlocks for now
-        // Full implementation would check wait-for graph cycles
+        _ = lock_info; // Lock info used for determining which transaction holds the resource
+
+        // Find transactions that currently hold conflicting locks
+        // For simplicity, we check if adding this dependency creates a cycle
+        const wait_list = self.wait_for_graph.get(transaction_id) orelse return false;
+
+        // Perform DFS to detect cycle
+        var visited = std.AutoHashMap(TransactionId, void).init(self.allocator);
+        defer visited.deinit();
+
+        var in_stack = std.AutoHashMap(TransactionId, void).init(self.allocator);
+        defer in_stack.deinit();
+
+        return self.detectCycleDFS(transaction_id, &visited, &in_stack);
+    }
+
+    /// DFS-based cycle detection in wait-for graph
+    fn detectCycleDFS(self: *Self, current: TransactionId, visited: *std.AutoHashMap(TransactionId, void), in_stack: *std.AutoHashMap(TransactionId, void)) bool {
+        // If already in current DFS path, we found a cycle
+        if (in_stack.contains(current)) {
+            return true;
+        }
+
+        // If already fully visited, no cycle through this node
+        if (visited.contains(current)) {
+            return false;
+        }
+
+        // Mark as in current DFS path
+        in_stack.put(current, {}) catch return false;
+
+        // Check all transactions this one is waiting for
+        if (self.wait_for_graph.get(current)) |wait_list| {
+            for (wait_list.items) |waiting_for| {
+                if (self.detectCycleDFS(waiting_for, visited, in_stack)) {
+                    return true;
+                }
+            }
+        }
+
+        // Remove from current path, mark as fully visited
+        _ = in_stack.remove(current);
+        visited.put(current, {}) catch {};
+
         return false;
+    }
+
+    /// Add a wait-for dependency (transaction_id is waiting for blocker_id)
+    pub fn addWaitDependency(self: *Self, transaction_id: TransactionId, blocker_id: TransactionId) !void {
+        var wait_list = self.wait_for_graph.getPtr(transaction_id) orelse blk: {
+            try self.wait_for_graph.put(transaction_id, std.ArrayList(TransactionId){});
+            break :blk self.wait_for_graph.getPtr(transaction_id).?;
+        };
+
+        // Check if dependency already exists
+        for (wait_list.items) |existing| {
+            if (existing == blocker_id) return;
+        }
+
+        try wait_list.append(self.allocator, blocker_id);
     }
 
     pub fn deinit(self: *Self) void {

@@ -91,7 +91,7 @@ pub fn main() !void {
         const timestamp = ts.sec;
         try stmt.bindParameter(2, zqlite.storage.Value{ .Integer = timestamp });
 
-        var result = try stmt.execute(conn.connection);
+        var result = try stmt.execute();
         defer result.deinit();
 
         std.debug.print("✅ Prepared statement executed, {} rows affected\n", .{result.affected_rows});

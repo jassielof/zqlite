@@ -73,8 +73,7 @@ export fn zqlite_query(conn: ?*zqlite_connection_t, sql: [*:0]const u8) ?*zqlite
     const connection: *zqlite.db.Connection = @ptrCast(@alignCast(conn.?));
     const sql_slice = std.mem.span(sql);
 
-    // For now, we'll create a simple result structure
-    // TODO: Implement proper result handling with row iteration
+    // Create result structure
     const result = c_allocator.create(QueryResult) catch return null;
     result.* = QueryResult{
         .rows = &[_][]?[]const u8{},
@@ -83,11 +82,80 @@ export fn zqlite_query(conn: ?*zqlite_connection_t, sql: [*:0]const u8) ?*zqlite
         .error_message = null,
     };
 
-    // Execute the query (for now just validate syntax)
-    connection.execute(sql_slice) catch {
-        result.error_message = c_allocator.dupe(u8, "Query execution failed") catch null;
+    // Execute the query and get actual results
+    var result_set = connection.query(sql_slice) catch |err| {
+        result.error_message = c_allocator.dupe(u8, @errorName(err)) catch null;
         return @as(*zqlite_result_t, @ptrCast(result));
     };
+    defer result_set.deinit();
+
+    // Get row and column counts
+    const row_count = result_set.count();
+    const col_count = result_set.columnCount();
+
+    if (row_count == 0 or col_count == 0) {
+        result.row_count = 0;
+        result.column_count = @intCast(col_count);
+        return @as(*zqlite_result_t, @ptrCast(result));
+    }
+
+    // Allocate rows array
+    var rows = c_allocator.alloc([]?[]const u8, row_count) catch {
+        result.error_message = c_allocator.dupe(u8, "OutOfMemory") catch null;
+        return @as(*zqlite_result_t, @ptrCast(result));
+    };
+
+    // Process each row
+    var row_idx: usize = 0;
+    while (result_set.next()) |row| {
+        var row_deinit = row;
+        defer row_deinit.deinit();
+
+        // Allocate columns for this row
+        var row_data = c_allocator.alloc(?[]const u8, col_count) catch {
+            // Clean up previously allocated rows
+            for (rows[0..row_idx]) |r| {
+                for (r) |cell| {
+                    if (cell) |c| c_allocator.free(c);
+                }
+                c_allocator.free(r);
+            }
+            c_allocator.free(rows);
+            result.error_message = c_allocator.dupe(u8, "OutOfMemory") catch null;
+            return @as(*zqlite_result_t, @ptrCast(result));
+        };
+
+        // Copy values
+        for (0..col_count) |col_idx| {
+            const value = row.getValue(col_idx);
+            if (value) |v| {
+                row_data[col_idx] = switch (v) {
+                    .Text => |t| c_allocator.dupe(u8, t) catch null,
+                    .Integer => |i| blk: {
+                        var buf: [32]u8 = undefined;
+                        const slice = std.fmt.bufPrint(&buf, "{d}", .{i}) catch "0";
+                        break :blk c_allocator.dupe(u8, slice) catch null;
+                    },
+                    .Real => |r| blk: {
+                        var buf: [64]u8 = undefined;
+                        const slice = std.fmt.bufPrint(&buf, "{d}", .{r}) catch "0";
+                        break :blk c_allocator.dupe(u8, slice) catch null;
+                    },
+                    .Null => null,
+                    else => null,
+                };
+            } else {
+                row_data[col_idx] = null;
+            }
+        }
+
+        rows[row_idx] = row_data;
+        row_idx += 1;
+    }
+
+    result.rows = rows;
+    result.row_count = @intCast(row_count);
+    result.column_count = @intCast(col_count);
 
     return @as(*zqlite_result_t, @ptrCast(result));
 }
@@ -214,7 +282,12 @@ export fn zqlite_bind_null(stmt: ?*zqlite_stmt_t, index: c_int) c_int {
 export fn zqlite_step(stmt: ?*zqlite_stmt_t) c_int {
     if (stmt == null) return ZQLITE_MISUSE;
 
-    // TODO: Implement proper step execution
+    const statement: *zqlite.db.PreparedStatement = @ptrCast(@alignCast(stmt.?));
+
+    // Execute the prepared statement using its stored connection
+    var result = statement.execute() catch return ZQLITE_ERROR;
+    defer result.deinit();
+
     return ZQLITE_OK;
 }
 

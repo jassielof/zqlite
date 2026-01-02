@@ -85,7 +85,7 @@ test "end-to-end workflow" {
     try stmt.bindParameter(1, zqlite.storage.Value{ .Text = keyboard_text });
     try stmt.bindParameter(2, zqlite.storage.Value{ .Real = 79.99 });
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit();
 
     try std.testing.expectEqual(@as(u32, 1), result.affected_rows);

@@ -28,7 +28,7 @@ test "Memory Management - No Leaks with DEFAULT CURRENT_TIMESTAMP" {
     var stmt = try conn.prepare("SELECT id, created_at FROM test_timestamps ORDER BY id");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 10);
@@ -73,7 +73,7 @@ test "Memory Management - Complex INSERT/UPDATE/DELETE Cycle" {
         var stmt = try conn.prepare("SELECT COUNT(*) FROM memory_test");
         defer stmt.deinit();
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit(allocator);
 
         // Delete batch
@@ -113,7 +113,7 @@ test "Memory Management - Function Call DEFAULT Values" {
     var stmt = try conn.prepare("SELECT COUNT(*) FROM function_defaults WHERE created_at IS NOT NULL");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     try testing.expect(result.rows.items.len == 1);
@@ -154,7 +154,7 @@ test "Memory Management - Large Text Fields" {
     var stmt = try conn.prepare("SELECT COUNT(*) FROM large_text");
     defer stmt.deinit();
 
-    var result = try stmt.execute(conn);
+    var result = try stmt.execute();
     defer result.deinit(allocator);
 
     switch (result.rows.items[0].values[0]) {
@@ -188,7 +188,7 @@ test "Memory Management - Connection Lifecycle" {
         var stmt = try conn.prepare("SELECT * FROM lifecycle_test");
         defer stmt.deinit();
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit(allocator);
 
         try testing.expect(result.rows.items.len == 1);
@@ -219,7 +219,7 @@ test "Memory Management - Prepared Statement Reuse" {
     while (i < 10) : (i += 1) {
         try conn.execute("INSERT INTO reuse_test (name) VALUES ('test')");
 
-        var result = try stmt.execute(conn);
+        var result = try stmt.execute();
         defer result.deinit(allocator);
 
         switch (result.rows.items[0].values[0]) {
