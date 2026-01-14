@@ -22,6 +22,43 @@ pub const ZQLITE_AUTH = 8;
 pub const ZQLITE_FORMAT = 9;
 pub const ZQLITE_RANGE = 10;
 pub const ZQLITE_NOTADB = 11;
+pub const ZQLITE_CONSTRAINT = 12;
+pub const ZQLITE_MISMATCH = 13;
+pub const ZQLITE_IOERR = 14;
+pub const ZQLITE_CORRUPT = 15;
+
+/// Extended error information
+const ErrorInfo = struct {
+    code: c_int,
+    message: [256]u8,
+    message_len: usize,
+    sql: ?[*:0]const u8,
+
+    fn init() ErrorInfo {
+        return ErrorInfo{
+            .code = ZQLITE_OK,
+            .message = [_]u8{0} ** 256,
+            .message_len = 0,
+            .sql = null,
+        };
+    }
+
+    fn set(self: *ErrorInfo, code: c_int, msg: []const u8, sql: ?[*:0]const u8) void {
+        self.code = code;
+        const copy_len = @min(msg.len, self.message.len - 1);
+        @memcpy(self.message[0..copy_len], msg[0..copy_len]);
+        self.message[copy_len] = 0;
+        self.message_len = copy_len;
+        self.sql = sql;
+    }
+
+    fn clear(self: *ErrorInfo) void {
+        self.code = ZQLITE_OK;
+        self.message[0] = 0;
+        self.message_len = 0;
+        self.sql = null;
+    }
+};
 
 /// Result structure for queries
 const QueryResult = struct {
@@ -31,47 +68,135 @@ const QueryResult = struct {
     error_message: ?[]const u8,
 };
 
-// Global allocator for C API (TODO: make this configurable)
+/// Wrapper for connection with error tracking
+const ConnectionWrapper = struct {
+    connection: *zqlite.db.Connection,
+    error_info: ErrorInfo,
+    allocator: std.mem.Allocator,
+};
+
+// Default global allocator for C API
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const c_allocator = gpa.allocator();
+var c_allocator: std.mem.Allocator = gpa.allocator();
+
+/// Custom allocator function pointer types for C interop
+pub const ZqliteAllocFn = *const fn (size: usize, user_data: ?*anyopaque) callconv(.c) ?*anyopaque;
+pub const ZqliteFreeFn = *const fn (ptr: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void;
+pub const ZqliteReallocFn = *const fn (ptr: ?*anyopaque, new_size: usize, user_data: ?*anyopaque) callconv(.c) ?*anyopaque;
+
+/// Custom allocator configuration
+var custom_alloc_fn: ?ZqliteAllocFn = null;
+var custom_free_fn: ?ZqliteFreeFn = null;
+var custom_realloc_fn: ?ZqliteReallocFn = null;
+var custom_user_data: ?*anyopaque = null;
+
+/// Set custom allocator functions for C API
+/// Call this before any other zqlite functions if you want custom memory management
+export fn zqlite_set_allocator(
+    alloc_fn: ?ZqliteAllocFn,
+    free_fn: ?ZqliteFreeFn,
+    realloc_fn: ?ZqliteReallocFn,
+    user_data: ?*anyopaque,
+) c_int {
+    if (alloc_fn == null or free_fn == null) {
+        // Reset to default allocator
+        custom_alloc_fn = null;
+        custom_free_fn = null;
+        custom_realloc_fn = null;
+        custom_user_data = null;
+        c_allocator = gpa.allocator();
+    } else {
+        custom_alloc_fn = alloc_fn;
+        custom_free_fn = free_fn;
+        custom_realloc_fn = realloc_fn;
+        custom_user_data = user_data;
+        // Note: We still use gpa for internal allocations as Zig's Allocator
+        // interface doesn't easily support C function pointers.
+        // Custom allocator is used for result data returned to C.
+    }
+    return ZQLITE_OK;
+}
 
 /// Open a database connection
 export fn zqlite_open(path: [*:0]const u8) ?*zqlite_connection_t {
     const path_slice = std.mem.span(path);
 
-    const conn = if (std.mem.eql(u8, path_slice, ":memory:"))
-        zqlite.openMemory(c_allocator) catch return null
-    else
-        zqlite.open(c_allocator, path_slice) catch return null;
+    // Create connection wrapper for error tracking
+    const wrapper = c_allocator.create(ConnectionWrapper) catch return null;
 
-    return @as(*zqlite_connection_t, @ptrCast(conn));
+    const conn = if (std.mem.eql(u8, path_slice, ":memory:"))
+        zqlite.openMemory(c_allocator) catch {
+            c_allocator.destroy(wrapper);
+            return null;
+        }
+    else
+        zqlite.open(c_allocator, path_slice) catch {
+            c_allocator.destroy(wrapper);
+            return null;
+        };
+
+    wrapper.* = ConnectionWrapper{
+        .connection = conn,
+        .error_info = ErrorInfo.init(),
+        .allocator = c_allocator,
+    };
+
+    return @as(*zqlite_connection_t, @ptrCast(wrapper));
 }
 
 /// Close a database connection
 export fn zqlite_close(conn: ?*zqlite_connection_t) void {
     if (conn) |c| {
-        const connection: *zqlite.db.Connection = @ptrCast(@alignCast(c));
-        connection.close();
+        const wrapper: *ConnectionWrapper = @ptrCast(@alignCast(c));
+        wrapper.connection.close();
+        c_allocator.destroy(wrapper);
     }
+}
+
+/// Get the underlying connection from a wrapper (for internal use)
+fn getConnection(conn: ?*zqlite_connection_t) ?*ConnectionWrapper {
+    if (conn) |c| {
+        return @ptrCast(@alignCast(c));
+    }
+    return null;
 }
 
 /// Execute a SQL statement (no result expected)
 export fn zqlite_execute(conn: ?*zqlite_connection_t, sql: [*:0]const u8) c_int {
-    if (conn == null) return ZQLITE_MISUSE;
-
-    const connection: *zqlite.db.Connection = @ptrCast(@alignCast(conn.?));
+    const wrapper = getConnection(conn) orelse return ZQLITE_MISUSE;
     const sql_slice = std.mem.span(sql);
 
-    connection.execute(sql_slice) catch return ZQLITE_ERROR;
+    wrapper.error_info.clear();
+    wrapper.connection.execute(sql_slice) catch |err| {
+        const error_code = mapErrorToCode(err);
+        wrapper.error_info.set(error_code, @errorName(err), sql);
+        return error_code;
+    };
     return ZQLITE_OK;
+}
+
+/// Map Zig errors to C error codes
+fn mapErrorToCode(err: anyerror) c_int {
+    return switch (err) {
+        error.OutOfMemory => ZQLITE_NOMEM,
+        error.TableNotFound => ZQLITE_ERROR,
+        error.ColumnNotFound => ZQLITE_ERROR,
+        error.SyntaxError => ZQLITE_ERROR,
+        error.TypeMismatch => ZQLITE_MISMATCH,
+        error.ConstraintViolation => ZQLITE_CONSTRAINT,
+        error.IoError => ZQLITE_IOERR,
+        error.CorruptData => ZQLITE_CORRUPT,
+        else => ZQLITE_ERROR,
+    };
 }
 
 /// Execute a SQL query and return results
 export fn zqlite_query(conn: ?*zqlite_connection_t, sql: [*:0]const u8) ?*zqlite_result_t {
-    if (conn == null) return null;
-
-    const connection: *zqlite.db.Connection = @ptrCast(@alignCast(conn.?));
+    const wrapper = getConnection(conn) orelse return null;
     const sql_slice = std.mem.span(sql);
+
+    wrapper.error_info.clear();
+    const connection = wrapper.connection;
 
     // Create result structure
     const result = c_allocator.create(QueryResult) catch return null;
@@ -84,6 +209,8 @@ export fn zqlite_query(conn: ?*zqlite_connection_t, sql: [*:0]const u8) ?*zqlite
 
     // Execute the query and get actual results
     var result_set = connection.query(sql_slice) catch |err| {
+        const error_code = mapErrorToCode(err);
+        wrapper.error_info.set(error_code, @errorName(err), sql);
         result.error_message = c_allocator.dupe(u8, @errorName(err)) catch null;
         return @as(*zqlite_result_t, @ptrCast(result));
     };
@@ -223,12 +350,15 @@ export fn zqlite_result_free(result: ?*zqlite_result_t) void {
 
 /// Prepare a SQL statement
 export fn zqlite_prepare(conn: ?*zqlite_connection_t, sql: [*:0]const u8) ?*zqlite_stmt_t {
-    if (conn == null) return null;
-
-    const connection: *zqlite.db.Connection = @ptrCast(@alignCast(conn.?));
+    const wrapper = getConnection(conn) orelse return null;
     const sql_slice = std.mem.span(sql);
 
-    const stmt = connection.prepare(sql_slice) catch return null;
+    wrapper.error_info.clear();
+    const stmt = wrapper.connection.prepare(sql_slice) catch |err| {
+        const error_code = mapErrorToCode(err);
+        wrapper.error_info.set(error_code, @errorName(err), sql);
+        return null;
+    };
     return @as(*zqlite_stmt_t, @ptrCast(stmt));
 }
 
@@ -311,35 +441,60 @@ export fn zqlite_finalize(stmt: ?*zqlite_stmt_t) c_int {
 
 /// Begin a transaction
 export fn zqlite_begin_transaction(conn: ?*zqlite_connection_t) c_int {
-    if (conn == null) return ZQLITE_MISUSE;
-
-    const connection: *zqlite.db.Connection = @ptrCast(@alignCast(conn.?));
-    connection.begin() catch return ZQLITE_ERROR;
+    const wrapper = getConnection(conn) orelse return ZQLITE_MISUSE;
+    wrapper.error_info.clear();
+    wrapper.connection.begin() catch |err| {
+        const error_code = mapErrorToCode(err);
+        wrapper.error_info.set(error_code, @errorName(err), null);
+        return error_code;
+    };
     return ZQLITE_OK;
 }
 
 /// Commit a transaction
 export fn zqlite_commit_transaction(conn: ?*zqlite_connection_t) c_int {
-    if (conn == null) return ZQLITE_MISUSE;
-
-    const connection: *zqlite.db.Connection = @ptrCast(@alignCast(conn.?));
-    connection.commit() catch return ZQLITE_ERROR;
+    const wrapper = getConnection(conn) orelse return ZQLITE_MISUSE;
+    wrapper.error_info.clear();
+    wrapper.connection.commit() catch |err| {
+        const error_code = mapErrorToCode(err);
+        wrapper.error_info.set(error_code, @errorName(err), null);
+        return error_code;
+    };
     return ZQLITE_OK;
 }
 
 /// Rollback a transaction
 export fn zqlite_rollback_transaction(conn: ?*zqlite_connection_t) c_int {
-    if (conn == null) return ZQLITE_MISUSE;
-
-    const connection: *zqlite.db.Connection = @ptrCast(@alignCast(conn.?));
-    connection.rollback() catch return ZQLITE_ERROR;
+    const wrapper = getConnection(conn) orelse return ZQLITE_MISUSE;
+    wrapper.error_info.clear();
+    wrapper.connection.rollback() catch |err| {
+        const error_code = mapErrorToCode(err);
+        wrapper.error_info.set(error_code, @errorName(err), null);
+        return error_code;
+    };
     return ZQLITE_OK;
 }
 
 /// Get the last error message
 export fn zqlite_errmsg(conn: ?*zqlite_connection_t) [*:0]const u8 {
-    _ = conn; // TODO: Implement error message tracking
-    return "Unknown error";
+    const wrapper = getConnection(conn) orelse return "Connection is null";
+    if (wrapper.error_info.message_len == 0) {
+        return "No error";
+    }
+    // Return pointer to the message buffer (null-terminated by ErrorInfo.set)
+    return @ptrCast(&wrapper.error_info.message);
+}
+
+/// Get the last error code
+export fn zqlite_errcode(conn: ?*zqlite_connection_t) c_int {
+    const wrapper = getConnection(conn) orelse return ZQLITE_MISUSE;
+    return wrapper.error_info.code;
+}
+
+/// Get the SQL that caused the last error
+export fn zqlite_errsql(conn: ?*zqlite_connection_t) ?[*:0]const u8 {
+    const wrapper = getConnection(conn) orelse return null;
+    return wrapper.error_info.sql;
 }
 
 /// Get the version string

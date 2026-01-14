@@ -17,9 +17,9 @@ pub const HDWallet = struct {
             var parts = std.mem.split(u8, path, "/");
             _ = parts.next(); // skip "m"
 
-            const purpose = try std.fmt.parseInt(u32, std.mem.trimRight(u8, parts.next().?, "'"), 10);
-            const coin_type = try std.fmt.parseInt(u32, std.mem.trimRight(u8, parts.next().?, "'"), 10);
-            const account = try std.fmt.parseInt(u32, std.mem.trimRight(u8, parts.next().?, "'"), 10);
+            const purpose = try std.fmt.parseInt(u32, std.mem.trimEnd(u8, parts.next().?, "'"), 10);
+            const coin_type = try std.fmt.parseInt(u32, std.mem.trimEnd(u8, parts.next().?, "'"), 10);
+            const account = try std.fmt.parseInt(u32, std.mem.trimEnd(u8, parts.next().?, "'"), 10);
             const change = try std.fmt.parseInt(u32, parts.next().?, 10);
             const address_index = try std.fmt.parseInt(u32, parts.next().?, 10);
 

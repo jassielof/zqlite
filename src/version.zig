@@ -2,7 +2,7 @@ const std = @import("std");
 
 /// ZQLite version information - automatically generated from build.zig.zon
 pub const MAJOR = 1;
-pub const MINOR = 4;
+pub const MINOR = 5;
 pub const PATCH = 0;
 
 /// Version string in format "1.3.0"
@@ -41,12 +41,12 @@ pub fn isAtLeast(major: u32, minor: u32, patch: u32) bool {
 test "version functions" {
     const testing = std.testing;
 
-    try testing.expectEqualStrings("1.4.0", VERSION_STRING);
-    try testing.expectEqualStrings("v1.4.0", VERSION_STRING_PREFIXED);
-    try testing.expectEqualStrings("ZQLite v1.4.0", FULL_VERSION_STRING);
+    try testing.expectEqualStrings("1.5.0", VERSION_STRING);
+    try testing.expectEqualStrings("v1.5.0", VERSION_STRING_PREFIXED);
+    try testing.expectEqualStrings("ZQLite v1.5.0", FULL_VERSION_STRING);
 
-    try testing.expect(getVersionNumber() == 1004000);
+    try testing.expect(getVersionNumber() == 1005000);
     try testing.expect(isAtLeast(1, 2, 0));
-    try testing.expect(isAtLeast(1, 4, 0));
+    try testing.expect(isAtLeast(1, 5, 0));
     try testing.expect(!isAtLeast(2, 0, 0));
 }

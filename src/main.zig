@@ -2,27 +2,26 @@ const std = @import("std");
 const zqlite = @import("zqlite");
 const cli = @import("zqlite").cli;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    // Collect args into a slice
+    var args_list: std.ArrayList([]const u8) = .{};
+    defer args_list.deinit(allocator);
 
-    // Convert [:0]u8 to []const u8
-    var const_args = try allocator.alloc([]const u8, args.len);
-    defer allocator.free(const_args);
-    for (args, 0..) |arg, i| {
-        const_args[i] = arg;
+    var args_iter = std.process.Args.Iterator.init(init.minimal.args);
+    while (args_iter.next()) |arg| {
+        try args_list.append(allocator, arg);
     }
+
+    const args = args_list.items;
 
     if (args.len <= 1) {
         // No arguments, start interactive shell
         try cli.runShell();
     } else {
         // Process command line arguments
-        try cli.executeCommand(allocator, const_args);
+        try cli.executeCommand(allocator, args);
     }
 }
 

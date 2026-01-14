@@ -1,17 +1,15 @@
 const std = @import("std");
 const zqlite = @import("zqlite");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    std.debug.print("🆔 zqlite UUID Demo\n\n", .{});
+    std.debug.print("zqlite UUID Demo\n\n", .{});
 
-    // Initialize PRNG for UUID generation
+    // Initialize PRNG for UUID generation using Io random
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
+        init.io.random(std.mem.asBytes(&seed));
         break :blk seed;
     });
     const random = prng.random();
@@ -31,9 +29,9 @@ pub fn main() !void {
 
         // Verify they match
         if (std.mem.eql(u8, uuid_str, reparsed_str)) {
-            std.debug.print("  ✅ Round-trip successful\n", .{});
+            std.debug.print("  Round-trip successful\n", .{});
         } else {
-            std.debug.print("  ❌ Round-trip failed!\n", .{});
+            std.debug.print("  Round-trip failed!\n", .{});
         }
 
         // Test UUID in database
@@ -54,7 +52,7 @@ pub fn main() !void {
         var result = try stmt.execute();
         defer result.deinit();
 
-        std.debug.print("  ✅ UUID stored in database\n\n", .{});
+        std.debug.print("  UUID stored in database\n\n", .{});
     }
 
     // Test UUID NIL value
@@ -70,5 +68,5 @@ pub fn main() !void {
     defer allocator.free(reformatted);
     std.debug.print("Test UUID: {s} -> {s}\n", .{ test_uuid, reformatted });
 
-    std.debug.print("\n🎯 UUID functionality is working!\n", .{});
+    std.debug.print("\nUUID functionality is working!\n", .{});
 }

@@ -24,7 +24,7 @@ test "SQLite Basic CRUD Operations" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 1);
     const count_value = result.rows.items[0].values[0];
@@ -59,7 +59,7 @@ test "SQLite Data Types Support" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 1);
     const row = result.rows.items[0];
@@ -103,7 +103,7 @@ test "SQLite WHERE Clauses and Filtering" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 2); // Laptop and Phone
 
@@ -112,7 +112,7 @@ test "SQLite WHERE Clauses and Filtering" {
     defer stmt2.deinit();
 
     var result2 = try stmt2.execute();
-    defer result2.deinit(allocator);
+    defer result2.deinit();
 
     try testing.expect(result2.rows.items.len == 2); // Laptop and Phone
 }
@@ -137,7 +137,7 @@ test "SQLite UPDATE and DELETE Operations" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 1);
     switch (result.rows.items[0].values[0]) {
@@ -152,7 +152,7 @@ test "SQLite UPDATE and DELETE Operations" {
     defer stmt2.deinit();
 
     var result2 = try stmt2.execute();
-    defer result2.deinit(allocator);
+    defer result2.deinit();
 
     switch (result2.rows.items[0].values[0]) {
         .Integer => |count| try testing.expect(count == 2), // Should have 2 items left
@@ -189,7 +189,7 @@ test "SQLite JOINS" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 2); // Alice has 2 orders
 }
@@ -213,7 +213,7 @@ test "SQLite GROUP BY and Aggregation" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 2);
 
@@ -242,7 +242,7 @@ test "SQLite DEFAULT CURRENT_TIMESTAMP" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 1);
 

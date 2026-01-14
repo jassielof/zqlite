@@ -38,33 +38,11 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "enable_concurrent", enable_concurrent);
     build_options.addOption(bool, "enable_ffi", enable_ffi);
 
-    // Get Git commit hash
-    const git_commit_result = std.process.Child.run(.{
-        .allocator = b.allocator,
-        .argv = &[_][]const u8{ "git", "rev-parse", "--short", "HEAD" },
-    }) catch null;
+    // Get Git commit hash (simplified for Zig 0.16 compatibility)
+    const git_commit = "dev";
 
-    const git_commit = if (git_commit_result) |result|
-        if (result.term == .Exited and result.term.Exited == 0)
-            std.mem.trim(u8, result.stdout, "\n\r ")
-        else
-            "unknown"
-    else
-        "unknown";
-
-    // Get build date (use date command for compatibility)
-    const date_result = std.process.Child.run(.{
-        .allocator = b.allocator,
-        .argv = &[_][]const u8{ "date", "+%Y-%m-%d %H:%M:%S" },
-    }) catch null;
-
-    const build_date = if (date_result) |result|
-        if (result.term == .Exited and result.term.Exited == 0)
-            std.mem.trim(u8, result.stdout, "\n\r ")
-        else
-            "unknown"
-    else
-        "unknown";
+    // Get build date (simplified for Zig 0.16 compatibility)
+    const build_date = "2026-01-14";
 
     // Build mode string
     const build_mode = switch (optimize) {
@@ -249,6 +227,25 @@ pub fn build(b: *std.Build) void {
     const memory_test_step = b.step("test-memory", "Run intensive memory leak detection tests");
     memory_test_step.dependOn(&run_memory_test.step);
 
+    // Add advanced tests (stress, security, edge cases)
+    const advanced_tests = b.addTest(.{
+        .name = "advanced_tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/unit/advanced_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    advanced_tests.root_module.addImport("zqlite", lib.root_module);
+    advanced_tests.root_module.addImport("zsync", zsync.module("zsync"));
+    advanced_tests.root_module.addOptions("build_options", build_options);
+
+    const run_advanced_tests = b.addRunArtifact(advanced_tests);
+
+    const advanced_test_step = b.step("test-advanced", "Run advanced tests (stress, security, edge cases)");
+    advanced_test_step.dependOn(&run_advanced_tests.step);
+
     // Add simple memory test (avoiding btree bug)
     const simple_memory_test = b.addExecutable(.{
         .name = "simple_memory_test",
@@ -417,27 +414,26 @@ pub fn build(b: *std.Build) void {
     minimal_bench_step.dependOn(&run_minimal_bench.step);
 
     // Basic examples that work without external dependencies
-    createBasicExample(b, "powerdns_example", lib, target, optimize, zsync);
-    createBasicExample(b, "cipher_dns", lib, target, optimize, zsync);
-    
+    createBasicExample(b, "powerdns_example", lib, target, optimize, zsync, build_options);
+    createBasicExample(b, "cipher_dns", lib, target, optimize, zsync, build_options);
+
     // v1.2.2 Universal API examples
-    createBasicExample(b, "universal_api_demo", lib, target, optimize, zsync);
-    createBasicExample(b, "web_backend_demo", lib, target, optimize, zsync);
-    
+    createBasicExample(b, "universal_api_demo", lib, target, optimize, zsync, build_options);
+    createBasicExample(b, "web_backend_demo", lib, target, optimize, zsync, build_options);
+
     // v1.3.0 PostgreSQL compatibility demos
-    createDemo(b, "uuid_demo", lib, target, optimize, zsync);
-    createDemo(b, "json_demo", lib, target, optimize, zsync);
-    createDemo(b, "connection_pool_demo", lib, target, optimize, zsync);
-    createDemo(b, "window_functions_demo", lib, target, optimize, zsync);
-    // createDemo(b, "query_cache_demo", lib, target, optimize, zsync); // TODO: Fix DoublyLinkedList API for Zig 0.16
-    createDemo(b, "array_operations_demo", lib, target, optimize, zsync);
+    createDemo(b, "uuid_demo", lib, target, optimize, zsync, build_options);
+    createDemo(b, "json_demo", lib, target, optimize, zsync, build_options);
+    createDemo(b, "connection_pool_demo", lib, target, optimize, zsync, build_options);
+    createDemo(b, "window_functions_demo", lib, target, optimize, zsync, build_options);
+    createDemo(b, "query_cache_demo", lib, target, optimize, zsync, build_options);
+    createDemo(b, "array_operations_demo", lib, target, optimize, zsync, build_options);
 
     // Ghostwire integration demo
-    createBasicExample(b, "ghostwire_integration_demo", lib, target, optimize, zsync);
+    createBasicExample(b, "ghostwire_integration_demo", lib, target, optimize, zsync, build_options);
 }
 
-fn createBasicExample(b: *std.Build, name: []const u8, lib: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, zsync: *std.Build.Dependency) void {
-    
+fn createBasicExample(b: *std.Build, name: []const u8, lib: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, zsync: *std.Build.Dependency, build_options: *std.Build.Step.Options) void {
     const example = b.addExecutable(.{
         .name = name,
         .root_module = b.createModule(.{
@@ -449,11 +445,11 @@ fn createBasicExample(b: *std.Build, name: []const u8, lib: *std.Build.Step.Comp
 
     example.root_module.addImport("zqlite", lib.root_module);
     example.root_module.addImport("zsync", zsync.module("zsync"));
+    example.root_module.addOptions("build_options", build_options);
     b.installArtifact(example);
 }
 
-fn createDemo(b: *std.Build, name: []const u8, lib: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, zsync: *std.Build.Dependency) void {
-    
+fn createDemo(b: *std.Build, name: []const u8, lib: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, zsync: *std.Build.Dependency, build_options: *std.Build.Step.Options) void {
     const demo = b.addExecutable(.{
         .name = name,
         .root_module = b.createModule(.{
@@ -465,5 +461,6 @@ fn createDemo(b: *std.Build, name: []const u8, lib: *std.Build.Step.Compile, tar
 
     demo.root_module.addImport("zqlite", lib.root_module);
     demo.root_module.addImport("zsync", zsync.module("zsync"));
+    demo.root_module.addOptions("build_options", build_options);
     b.installArtifact(demo);
 }

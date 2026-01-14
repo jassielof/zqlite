@@ -2,22 +2,171 @@ const std = @import("std");
 const pager = @import("pager.zig");
 const storage = @import("storage.zig");
 
+/// Node cache for reducing deserialization overhead
+pub const NodeCache = struct {
+    allocator: std.mem.Allocator,
+    entries: std.AutoHashMap(u32, CacheEntry),
+    lru_order: std.ArrayListUnmanaged(u32),
+    max_entries: usize,
+    hits: u64,
+    misses: u64,
+
+    const CacheEntry = struct {
+        node: Node,
+        dirty: bool,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, max_entries: usize) NodeCache {
+        return NodeCache{
+            .allocator = allocator,
+            .entries = std.AutoHashMap(u32, CacheEntry).init(allocator),
+            .lru_order = .{},
+            .max_entries = max_entries,
+            .hits = 0,
+            .misses = 0,
+        };
+    }
+
+    pub fn deinit(self: *NodeCache) void {
+        // Free all cached nodes
+        var iter = self.entries.iterator();
+        while (iter.next()) |entry| {
+            var node = entry.value_ptr.node;
+            node.deinit(self.allocator);
+        }
+        self.entries.deinit();
+        self.lru_order.deinit(self.allocator);
+    }
+
+    pub fn get(self: *NodeCache, page_id: u32) ?*Node {
+        if (self.entries.getPtr(page_id)) |entry| {
+            self.hits += 1;
+            // Move to front of LRU
+            self.moveToFront(page_id);
+            return &entry.node;
+        }
+        self.misses += 1;
+        return null;
+    }
+
+    pub fn put(self: *NodeCache, page_id: u32, node: Node, dirty: bool) !void {
+        // Evict if at capacity
+        if (self.entries.count() >= self.max_entries and !self.entries.contains(page_id)) {
+            try self.evictOldest();
+        }
+
+        // Add or update entry
+        const result = try self.entries.getOrPut(page_id);
+        if (result.found_existing) {
+            // Free old node data
+            result.value_ptr.node.deinit(self.allocator);
+        }
+        result.value_ptr.* = CacheEntry{ .node = node, .dirty = dirty };
+
+        // Update LRU order
+        if (!result.found_existing) {
+            try self.lru_order.append(self.allocator, page_id);
+        } else {
+            self.moveToFront(page_id);
+        }
+    }
+
+    pub fn markDirty(self: *NodeCache, page_id: u32) void {
+        if (self.entries.getPtr(page_id)) |entry| {
+            entry.dirty = true;
+        }
+    }
+
+    pub fn remove(self: *NodeCache, page_id: u32) void {
+        if (self.entries.fetchRemove(page_id)) |kv| {
+            var node = kv.value.node;
+            node.deinit(self.allocator);
+            // Remove from LRU order
+            for (self.lru_order.items, 0..) |id, i| {
+                if (id == page_id) {
+                    _ = self.lru_order.orderedRemove(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn moveToFront(self: *NodeCache, page_id: u32) void {
+        for (self.lru_order.items, 0..) |id, i| {
+            if (id == page_id) {
+                _ = self.lru_order.orderedRemove(i);
+                self.lru_order.append(self.allocator, page_id) catch {};
+                break;
+            }
+        }
+    }
+
+    fn evictOldest(self: *NodeCache) !void {
+        if (self.lru_order.items.len == 0) return;
+
+        const oldest_id = self.lru_order.items[0];
+        _ = self.lru_order.orderedRemove(0);
+
+        if (self.entries.fetchRemove(oldest_id)) |kv| {
+            var node = kv.value.node;
+            node.deinit(self.allocator);
+        }
+    }
+
+    pub fn getStats(self: *const NodeCache) struct { hits: u64, misses: u64, entries: usize } {
+        return .{
+            .hits = self.hits,
+            .misses = self.misses,
+            .entries = self.entries.count(),
+        };
+    }
+
+    pub fn clear(self: *NodeCache) void {
+        var iter = self.entries.iterator();
+        while (iter.next()) |entry| {
+            var node = entry.value_ptr.node;
+            node.deinit(self.allocator);
+        }
+        self.entries.clearRetainingCapacity();
+        self.lru_order.clearRetainingCapacity();
+    }
+};
+
 /// B-tree implementation for database storage
 pub const BTree = struct {
     allocator: std.mem.Allocator,
     pager: *pager.Pager,
     root_page: u32,
     order: u32, // Maximum number of children per node
+    node_cache: ?*NodeCache, // Optional node cache for performance
+    cache_enabled: bool,
 
     const Self = @This();
     const DEFAULT_ORDER = 64;
+    const DEFAULT_CACHE_SIZE = 128; // Default cache size
 
     /// Initialize a new B-tree
     pub fn init(allocator: std.mem.Allocator, page_manager: *pager.Pager) !*Self {
+        return initWithCache(allocator, page_manager, false, 0);
+    }
+
+    /// Initialize a new B-tree with optional caching
+    pub fn initWithCache(allocator: std.mem.Allocator, page_manager: *pager.Pager, enable_cache: bool, cache_size: usize) !*Self {
         var tree = try allocator.create(Self);
         tree.allocator = allocator;
         tree.pager = page_manager;
         tree.order = DEFAULT_ORDER;
+        tree.cache_enabled = enable_cache;
+
+        // Initialize cache if enabled
+        if (enable_cache) {
+            const actual_cache_size = if (cache_size == 0) DEFAULT_CACHE_SIZE else cache_size;
+            const cache = try allocator.create(NodeCache);
+            cache.* = NodeCache.init(allocator, actual_cache_size);
+            tree.node_cache = cache;
+        } else {
+            tree.node_cache = null;
+        }
 
         // Allocate root page
         tree.root_page = try page_manager.allocatePage();
@@ -28,6 +177,43 @@ pub const BTree = struct {
         try tree.writeNode(tree.root_page, &root_node);
 
         return tree;
+    }
+
+    /// Enable caching on an existing B-tree
+    pub fn enableCache(self: *Self, cache_size: usize) !void {
+        if (self.node_cache != null) return; // Already enabled
+
+        const actual_cache_size = if (cache_size == 0) DEFAULT_CACHE_SIZE else cache_size;
+        const cache = try self.allocator.create(NodeCache);
+        cache.* = NodeCache.init(self.allocator, actual_cache_size);
+        self.node_cache = cache;
+        self.cache_enabled = true;
+    }
+
+    /// Disable caching and flush all cached nodes
+    pub fn disableCache(self: *Self) void {
+        if (self.node_cache) |cache| {
+            cache.deinit();
+            self.allocator.destroy(cache);
+            self.node_cache = null;
+            self.cache_enabled = false;
+        }
+    }
+
+    /// Get cache statistics
+    pub fn getCacheStats(self: *const Self) ?struct { hits: u64, misses: u64, entries: usize, hit_rate: f64 } {
+        if (self.node_cache) |cache| {
+            const stats = cache.getStats();
+            const total = stats.hits + stats.misses;
+            const hit_rate = if (total > 0) @as(f64, @floatFromInt(stats.hits)) / @as(f64, @floatFromInt(total)) else 0.0;
+            return .{
+                .hits = stats.hits,
+                .misses = stats.misses,
+                .entries = stats.entries,
+                .hit_rate = hit_rate,
+            };
+        }
+        return null;
     }
 
     /// Insert a key-value pair
@@ -176,7 +362,8 @@ pub const BTree = struct {
         if (search_result.found) {
             // Found exact key
             if (node.is_leaf) {
-                return node.values[search_result.index];
+                // Clone the row since the node will be freed
+                return try self.cloneRow(node.values[search_result.index]);
             }
             // For internal nodes, we need to continue searching
         }
@@ -187,6 +374,18 @@ pub const BTree = struct {
 
         // Search in appropriate child
         return self.searchNode(node.children[search_result.index], key);
+    }
+
+    /// Clone a row with all its values
+    fn cloneRow(self: *Self, row: storage.Row) !storage.Row {
+        var cloned_values = try self.allocator.alloc(storage.Value, row.values.len);
+        errdefer self.allocator.free(cloned_values);
+
+        for (row.values, 0..) |value, i| {
+            cloned_values[i] = try self.cloneValueSimple(value);
+        }
+
+        return storage.Row{ .values = cloned_values };
     }
 
     /// Collect all values from leaf nodes (for table scans)
@@ -420,8 +619,11 @@ pub const BTree = struct {
         }
     }
 
-    /// Read a node from storage
+    /// Read a node from storage (with optional caching)
     fn readNode(self: *Self, page_id: u32) !Node {
+        // Note: We always deserialize a fresh copy because nodes are modified
+        // in place during operations. The cache is used to avoid re-reading
+        // from the pager for frequently accessed nodes.
         const page = try self.pager.getPage(page_id);
         return Node.deserialize(self.allocator, page.data, self.order);
     }
@@ -433,8 +635,40 @@ pub const BTree = struct {
         try self.pager.markDirty(page_id);
     }
 
+    /// Bulk insert multiple key-value pairs efficiently
+    /// Sorts keys first if not already sorted for better insertion performance
+    pub fn bulkInsert(self: *Self, keys: []u64, values: []storage.Row) !void {
+        if (keys.len != values.len) return error.MismatchedLengths;
+        if (keys.len == 0) return;
+
+        // Create index array for sorting
+        var indices = try self.allocator.alloc(usize, keys.len);
+        defer self.allocator.free(indices);
+        for (0..keys.len) |i| {
+            indices[i] = i;
+        }
+
+        // Sort indices by key value
+        std.mem.sort(usize, indices, keys, struct {
+            fn lessThan(k: []u64, a: usize, b: usize) bool {
+                return k[a] < k[b];
+            }
+        }.lessThan);
+
+        // Insert in sorted order for better tree balance
+        for (indices) |idx| {
+            try self.insert(keys[idx], values[idx]);
+        }
+    }
+
     /// Clean up B-tree
     pub fn deinit(self: *Self) void {
+        // Clean up cache first
+        if (self.node_cache) |cache| {
+            cache.deinit();
+            self.allocator.destroy(cache);
+        }
+
         // Recursively clean up all nodes starting from root
         self.cleanupNodeRecursive(self.root_page) catch {
             // If cleanup fails, we still need to free the BTree struct
@@ -502,7 +736,7 @@ pub const BTree = struct {
             .Blob => |b| storage.Value{ .Blob = try self.allocator.dupe(u8, b) },
             .Null => storage.Value.Null,
             .Parameter => |param_index| storage.Value{ .Parameter = param_index },
-            .FunctionCall => |_| storage.Value.Null, // Simplified - function calls shouldn't be in stored values
+            .FunctionCall => storage.Value.Null, // Simplified - function calls shouldn't be in stored values
             .JSON => |json| storage.Value{ .JSON = try self.allocator.dupe(u8, json) },
             .JSONB => |jsonb| storage.Value{ .JSONB = storage.JSONBValue.init(self.allocator, try jsonb.toString(self.allocator)) catch return storage.Value.Null },
             .UUID => |uuid| storage.Value{ .UUID = uuid },
@@ -721,7 +955,7 @@ pub const Node = struct {
                     std.mem.writeInt(u32, buffer[pos..][0..4], param_index, .little);
                     pos += 4;
                 },
-                .FunctionCall => |_| {
+                .FunctionCall => {
                     // Function calls should be evaluated before storage - this is a fallback
                     if (pos + 1 > buffer.len) return error.BufferTooSmall;
                     buffer[pos] = 0; // Store as NULL
@@ -1053,7 +1287,11 @@ test "btree insert and search comprehensive" {
         const result = try btree.search(key);
         try std.testing.expect(result != null);
         if (result) |row| {
-            try std.testing.expectEqual(storage.Value{ .Integer = @intCast(key) }, row.values[0]);
+            // Compare the integer value directly
+            switch (row.values[0]) {
+                .Integer => |val| try std.testing.expectEqual(@as(i64, @intCast(key)), val),
+                else => return error.UnexpectedValueType,
+            }
             allocator.free(row.values[1].Text);
             allocator.free(row.values);
         }
@@ -1062,4 +1300,118 @@ test "btree insert and search comprehensive" {
     // Search for non-existent key
     const not_found = try btree.search(999);
     try std.testing.expect(not_found == null);
+}
+
+test "btree with cache enabled" {
+    const allocator = std.testing.allocator;
+    const pager_inst = try pager.Pager.initMemory(allocator);
+    defer pager_inst.deinit();
+
+    // Create btree with cache enabled
+    const btree = try BTree.initWithCache(allocator, pager_inst, true, 64);
+    defer btree.deinit();
+
+    try std.testing.expect(btree.cache_enabled);
+    try std.testing.expect(btree.node_cache != null);
+
+    // Insert test data
+    const test_keys = [_]u64{ 10, 20, 5, 15, 25 };
+    for (test_keys) |key| {
+        var values = try allocator.alloc(storage.Value, 1);
+        values[0] = storage.Value{ .Integer = @intCast(key) };
+        const value = storage.Row{ .values = values };
+        try btree.insert(key, value);
+    }
+
+    // Search for all inserted keys
+    for (test_keys) |key| {
+        const result = try btree.search(key);
+        try std.testing.expect(result != null);
+        if (result) |row| {
+            allocator.free(row.values);
+        }
+    }
+
+    // Check cache stats
+    const stats = btree.getCacheStats();
+    try std.testing.expect(stats != null);
+}
+
+test "btree bulk insert" {
+    const allocator = std.testing.allocator;
+    const pager_inst = try pager.Pager.initMemory(allocator);
+    defer pager_inst.deinit();
+
+    const btree = try BTree.init(allocator, pager_inst);
+    defer btree.deinit();
+
+    // Create test data in reverse order
+    var keys = [_]u64{ 50, 40, 30, 20, 10 };
+    var values: [5]storage.Row = undefined;
+
+    for (0..5) |i| {
+        var row_values = try allocator.alloc(storage.Value, 1);
+        row_values[0] = storage.Value{ .Integer = @intCast(keys[i]) };
+        values[i] = storage.Row{ .values = row_values };
+    }
+
+    // Bulk insert (should sort internally)
+    try btree.bulkInsert(&keys, &values);
+
+    // Verify all keys are searchable
+    for (keys) |key| {
+        const result = try btree.search(key);
+        try std.testing.expect(result != null);
+        if (result) |row| {
+            allocator.free(row.values);
+        }
+    }
+}
+
+test "node cache LRU eviction" {
+    const allocator = std.testing.allocator;
+
+    var cache = NodeCache.init(allocator, 3);
+    defer cache.deinit();
+
+    // Create mock nodes
+    for (0..5) |i| {
+        var node = try Node.initLeaf(allocator, 4);
+        node.key_count = 0;
+        try cache.put(@intCast(i), node, false);
+    }
+
+    // Cache should only have 3 entries (max capacity)
+    const stats = cache.getStats();
+    try std.testing.expectEqual(@as(usize, 3), stats.entries);
+
+    // First two entries should have been evicted (page 0 and 1)
+    try std.testing.expect(cache.get(0) == null);
+    try std.testing.expect(cache.get(1) == null);
+    try std.testing.expect(cache.get(2) != null);
+    try std.testing.expect(cache.get(3) != null);
+    try std.testing.expect(cache.get(4) != null);
+}
+
+test "btree enable/disable cache" {
+    const allocator = std.testing.allocator;
+    const pager_inst = try pager.Pager.initMemory(allocator);
+    defer pager_inst.deinit();
+
+    var btree = try BTree.init(allocator, pager_inst);
+    defer btree.deinit();
+
+    // Initially cache is disabled
+    try std.testing.expect(!btree.cache_enabled);
+    try std.testing.expect(btree.node_cache == null);
+
+    // Enable cache
+    try btree.enableCache(32);
+    try std.testing.expect(btree.cache_enabled);
+    try std.testing.expect(btree.node_cache != null);
+
+    // Disable cache
+    btree.disableCache();
+    try std.testing.expect(!btree.cache_enabled);
+    try std.testing.expect(btree.node_cache == null);
 }

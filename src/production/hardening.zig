@@ -9,7 +9,6 @@ const std = @import("std");
 /// - Rate limiting for database operations
 /// - Audit logging for security-relevant events
 /// - Resource limits and quotas
-
 /// Securely zero memory to prevent sensitive data from remaining in memory.
 /// Uses volatile operations to prevent compiler optimization.
 pub fn secureZero(buffer: []u8) void {

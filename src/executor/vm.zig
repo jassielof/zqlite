@@ -10,8 +10,49 @@ pub const VirtualMachine = struct {
     connection: *db.Connection,
     parameters: ?[]storage.Value, // Optional parameters for prepared statements
     function_evaluator: functions.FunctionEvaluator,
+    /// CTE context: maps CTE names to their result rows
+    cte_context: std.StringHashMap(CTEResult),
+    /// Current table being scanned (for column name resolution in projection)
+    current_table: ?*storage.Table,
 
     const Self = @This();
+
+    /// Error set for condition/expression evaluation
+    pub const EvalError = error{
+        OutOfMemory,
+        ColumnNotFound,
+        DivisionByZero,
+        TypeMismatch,
+        InvalidOperator,
+        ParameterNotBound,
+        InvalidFunctionCall,
+        FunctionNotFound,
+        InvalidArgumentCount,
+        Overflow,
+    };
+
+    /// Stored CTE result
+    pub const CTEResult = struct {
+        rows: []storage.Row,
+        column_names: ?[][]const u8,
+
+        pub fn deinit(self: *CTEResult, allocator: std.mem.Allocator) void {
+            for (self.rows) |row| {
+                for (row.values) |value| {
+                    value.deinit(allocator);
+                }
+                allocator.free(row.values);
+            }
+            allocator.free(self.rows);
+
+            if (self.column_names) |cols| {
+                for (cols) |col| {
+                    allocator.free(col);
+                }
+                allocator.free(cols);
+            }
+        }
+    };
 
     /// Initialize virtual machine
     pub fn init(allocator: std.mem.Allocator, connection: *db.Connection) Self {
@@ -22,7 +63,25 @@ pub const VirtualMachine = struct {
             .connection = connection,
             .parameters = null,
             .function_evaluator = functions.FunctionEvaluator.init(connection.allocator),
+            .cte_context = std.StringHashMap(CTEResult).init(connection.allocator),
+            .current_table = null,
         };
+    }
+
+    /// Clean up VM resources including CTE context
+    pub fn deinitVM(self: *Self) void {
+        self.clearCTEContext();
+        self.cte_context.deinit();
+    }
+
+    /// Clear all CTE results
+    fn clearCTEContext(self: *Self) void {
+        var iter = self.cte_context.iterator();
+        while (iter.next()) |entry| {
+            var result = entry.value_ptr.*;
+            result.deinit(self.connection.allocator);
+        }
+        self.cte_context.clearRetainingCapacity();
     }
 
     /// Execute a query plan
@@ -71,15 +130,112 @@ pub const VirtualMachine = struct {
             .CreateIndex => |*create_idx| try self.executeCreateIndex(create_idx, result),
             .DropIndex => |*drop_idx| try self.executeDropIndex(drop_idx, result),
             .DropTable => |*drop_tbl| try self.executeDropTable(drop_tbl, result),
+            .CreateCTE => |*cte| try self.executeCreateCTE(cte, result),
+            .Pragma => |*pragma| try self.executePragma(pragma, result),
+            .Explain => |*explain| try self.executeExplain(explain, result),
+        }
+    }
+
+    /// Execute CTE creation - stores the CTE result for later reference
+    fn executeCreateCTE(self: *Self, cte: *planner.CreateCTEStep, result: *ExecutionResult) anyerror!void {
+        // Create a temporary result to execute the CTE subquery
+        var cte_result = ExecutionResult{
+            .rows = .{},
+            .affected_rows = 0,
+            .connection = self.connection,
+        };
+
+        // Execute the CTE's subquery steps (non-recursive since CTEs can't contain CTEs in subquery)
+        for (cte.subquery_steps) |*step| {
+            try self.executeNonCTEStep(step, &cte_result);
+        }
+
+        // Clone the result rows for storage in CTE context
+        var stored_rows = try self.connection.allocator.alloc(storage.Row, cte_result.rows.items.len);
+        for (cte_result.rows.items, 0..) |row, i| {
+            var cloned_values = try self.connection.allocator.alloc(storage.Value, row.values.len);
+            for (row.values, 0..) |value, j| {
+                cloned_values[j] = try value.clone(self.connection.allocator);
+            }
+            stored_rows[i] = storage.Row{ .values = cloned_values };
+        }
+
+        // Clone column names if provided
+        var stored_column_names: ?[][]const u8 = null;
+        if (cte.column_names) |cols| {
+            var cloned_cols = try self.connection.allocator.alloc([]const u8, cols.len);
+            for (cols, 0..) |col, i| {
+                cloned_cols[i] = try self.connection.allocator.dupe(u8, col);
+            }
+            stored_column_names = cloned_cols;
+        }
+
+        // Store in CTE context
+        try self.cte_context.put(cte.name, CTEResult{
+            .rows = stored_rows,
+            .column_names = stored_column_names,
+        });
+
+        // Clean up temporary result
+        cte_result.deinit();
+
+        // CTE creation doesn't affect the main result
+        _ = result;
+    }
+
+    /// Execute a step that is not a CTE (used by CTE execution to avoid recursion)
+    fn executeNonCTEStep(self: *Self, step: *planner.ExecutionStep, result: *ExecutionResult) !void {
+        switch (step.*) {
+            .TableScan => |*scan| try self.executeTableScan(scan, result),
+            .Filter => |*filter| try self.executeFilter(filter, result),
+            .Project => |*project| try self.executeProject(project, result),
+            .Limit => |*limit| try self.executeLimit(limit, result),
+            .Insert => |*insert| try self.executeInsert(insert, result),
+            .CreateTable => |*create| try self.executeCreateTable(create, result),
+            .Update => |*update| try self.executeUpdate(update, result),
+            .Delete => |*delete| try self.executeDelete(delete, result),
+            .NestedLoopJoin => |*join| try self.executeNestedLoopJoin(join, result),
+            .HashJoin => |*join| try self.executeHashJoin(join, result),
+            .Aggregate => |*agg| try self.executeAggregate(agg, result),
+            .GroupBy => |*group| try self.executeGroupBy(group, result),
+            .BeginTransaction => try self.executeBeginTransaction(result),
+            .Commit => try self.executeCommit(result),
+            .Rollback => try self.executeRollback(result),
+            .CreateIndex => |*create_idx| try self.executeCreateIndex(create_idx, result),
+            .DropIndex => |*drop_idx| try self.executeDropIndex(drop_idx, result),
+            .DropTable => |*drop_tbl| try self.executeDropTable(drop_tbl, result),
+            .CreateCTE => {
+                // CTEs within CTEs are not supported in this version
+                return error.NestedCTENotSupported;
+            },
+            .Pragma => |*pragma| try self.executePragma(pragma, result),
+            .Explain => |*explain| try self.executeExplain(explain, result),
         }
     }
 
     /// Execute table scan
     fn executeTableScan(self: *Self, scan: *planner.TableScanStep, result: *ExecutionResult) !void {
-        // Executing table scan
+        // First check if this is a CTE reference
+        if (self.cte_context.get(scan.table_name)) |cte_result| {
+            // Use CTE results instead of table
+            for (cte_result.rows) |row| {
+                // Clone the row for the result
+                var cloned_values = try self.connection.allocator.alloc(storage.Value, row.values.len);
+                for (row.values, 0..) |value, j| {
+                    cloned_values[j] = try value.clone(self.connection.allocator);
+                }
+                try result.rows.append(self.connection.allocator, storage.Row{ .values = cloned_values });
+            }
+            return;
+        }
+
+        // Executing table scan on actual table
         const table = self.connection.storage_engine.getTable(scan.table_name) orelse {
             return error.TableNotFound;
         };
+
+        // Track the current table for column name resolution in projection
+        self.current_table = table;
 
         const rows = try table.select(self.connection.allocator);
         defer {
@@ -110,9 +266,16 @@ pub const VirtualMachine = struct {
         for (result.rows.items) |row| {
             if (try self.evaluateCondition(&filter.condition, &row)) {
                 try filtered_rows.append(self.connection.allocator, row);
+            } else {
+                // Free rows that don't match the filter condition
+                for (row.values) |value| {
+                    value.deinit(self.connection.allocator);
+                }
+                self.connection.allocator.free(row.values);
             }
         }
 
+        // Only free the ArrayList structure, not its contents (they're now in filtered_rows or freed)
         result.rows.deinit(self.connection.allocator);
         result.rows = filtered_rows;
     }
@@ -124,49 +287,100 @@ pub const VirtualMachine = struct {
             return;
         }
 
+        // Use the current table schema to map column names to indices
+        const table = self.current_table;
+
         // Create projected rows with only selected columns
         var projected_rows: std.ArrayList(storage.Row) = .{};
 
+        // Track which original indices we're using to properly handle memory
+        const num_cols = if (table) |t| t.schema.columns.len else project.columns.len;
+        var used_indices = try self.connection.allocator.alloc(bool, num_cols);
+        defer self.connection.allocator.free(used_indices);
+
         for (result.rows.items) |original_row| {
+            @memset(used_indices, false);
             var projected_values: std.ArrayList(storage.Value) = .{};
 
-            // For now, we'll assume column order matches project.columns order
-            // In a real implementation, we'd need column metadata from the table schema
-            for (project.columns, 0..) |col_name, i| {
-                if (i < original_row.values.len) {
-                    // Transfer ownership of the value instead of cloning
-                    // Transferring value ownership
-                    try projected_values.append(self.connection.allocator, original_row.values[i]);
+            for (project.columns, 0..) |col_name, col_i| {
+                // Check if we have an expression for this column
+                if (project.expressions) |exprs| {
+                    const expr = &exprs[col_i];
+                    switch (expr.*) {
+                        .Case => |case_expr| {
+                            // Evaluate CASE expression
+                            const case_value = try self.evaluateCaseExpression(&case_expr, &original_row);
+                            try projected_values.append(self.connection.allocator, case_value);
+                            continue;
+                        },
+                        .FunctionCall => |func_call| {
+                            // Evaluate function call with row context (COALESCE, NULLIF, IFNULL, etc.)
+                            const func_value = try self.evaluateFunctionWithRow(func_call, &original_row);
+                            try projected_values.append(self.connection.allocator, func_value);
+                            continue;
+                        },
+                        .Simple => {
+                            // Fall through to normal column lookup
+                        },
+                        else => {
+                            // Other expressions not yet supported (Window, Aggregate in non-aggregate context)
+                            try projected_values.append(self.connection.allocator, storage.Value.Null);
+                            continue;
+                        },
+                    }
+                }
+
+                // Find the column index by name in the table schema
+                var col_idx: ?usize = null;
+                if (table) |t| {
+                    for (t.schema.columns, 0..) |col, idx| {
+                        if (std.mem.eql(u8, col.name, col_name)) {
+                            col_idx = idx;
+                            break;
+                        }
+                    }
+                }
+
+                if (col_idx) |idx| {
+                    if (idx < original_row.values.len) {
+                        // Transfer ownership of the value
+                        try projected_values.append(self.connection.allocator, original_row.values[idx]);
+                        used_indices[idx] = true;
+                    } else {
+                        try projected_values.append(self.connection.allocator, storage.Value.Null);
+                    }
                 } else {
-                    // Column doesn't exist, add NULL
+                    // Column not found, add NULL
                     try projected_values.append(self.connection.allocator, storage.Value.Null);
                 }
-                _ = col_name; // Suppress unused warning for now
             }
 
             try projected_rows.append(self.connection.allocator, storage.Row{
                 .values = try projected_values.toOwnedSlice(self.connection.allocator),
             });
+
+            // Free values that weren't used in projection
+            for (original_row.values, 0..) |value, idx| {
+                if (!used_indices[idx]) {
+                    value.deinit(self.connection.allocator);
+                }
+            }
+            self.connection.allocator.free(original_row.values);
         }
 
-        // Clean up original rows carefully - we transferred value ownership, so only free the arrays
-        for (result.rows.items) |row| {
-            // Don't call value.deinit() since we transferred ownership to projected rows
-            // Cleaning up original row array
-            self.connection.allocator.free(row.values);
-        }
         result.rows.deinit(self.connection.allocator);
         result.rows = projected_rows;
     }
 
-    /// Clone a storage value
     /// Resolve a value, substituting parameters if needed
+    /// IMPORTANT: The returned value is cloned and must be freed by the caller
     fn resolveValue(self: *Self, value: storage.Value) !storage.Value {
         return switch (value) {
             .Parameter => |param_index| blk: {
                 if (self.parameters) |params| {
                     if (param_index < params.len) {
-                        break :blk params[param_index];
+                        // Clone the parameter value so caller can safely free it
+                        break :blk try self.cloneValue(params[param_index]);
                     } else {
                         return error.ParameterIndexOutOfBounds;
                     }
@@ -181,7 +395,11 @@ pub const VirtualMachine = struct {
 
                 break :blk try self.function_evaluator.evaluateFunction(ast_function_call);
             },
-            else => value, // Return the value as-is for non-parameters
+            // For other value types, clone if they have heap allocations
+            .Text => |t| storage.Value{ .Text = try self.connection.allocator.dupe(u8, t) },
+            .Blob => |b| storage.Value{ .Blob = try self.connection.allocator.dupe(u8, b) },
+            .JSON => |j| storage.Value{ .JSON = try self.connection.allocator.dupe(u8, j) },
+            else => value, // Integer, Real, Null, etc. don't need cloning
         };
     }
 
@@ -218,9 +436,9 @@ pub const VirtualMachine = struct {
     fn evaluateStorageDefaultValue(self: *Self, default_value: storage.Column.DefaultValue) !storage.Value {
         return switch (default_value) {
             .Literal => |literal| {
-                // Always clone literal DEFAULT values to prevent double-free
-                const resolved_value = try self.resolveValue(literal);
-                return try resolved_value.clone(self.connection.allocator);
+                // resolveValue already clones heap-allocated values (Text, Blob, JSON)
+                // so we don't need to clone again
+                return try self.resolveValue(literal);
             },
             .FunctionCall => |function_call| {
                 // Convert storage function call to AST function call for evaluation
@@ -474,7 +692,8 @@ pub const VirtualMachine = struct {
                         return error.ColumnNotFound;
                     }
 
-                    const resolved_value = try self.cloneValue(try self.resolveValue(row_values[value_idx]));
+                    // resolveValue already returns owned/cloned values
+                    const resolved_value = try self.resolveValue(row_values[value_idx]);
                     final_values[table_col_idx.?] = resolved_value;
                     values_initialized = @max(values_initialized, table_col_idx.? + 1);
                 }
@@ -485,7 +704,8 @@ pub const VirtualMachine = struct {
                     if (i >= table.schema.columns.len) {
                         return error.TooManyValues;
                     }
-                    const resolved_value = try self.cloneValue(try self.resolveValue(value));
+                    // resolveValue already returns owned/cloned values
+                    const resolved_value = try self.resolveValue(value);
                     final_values[i] = resolved_value;
                     values_initialized = i + 1;
                 }
@@ -567,6 +787,9 @@ pub const VirtualMachine = struct {
             return error.TableNotFound;
         };
 
+        // Track the current table for column name resolution in condition evaluation
+        self.current_table = table;
+
         // Get all current rows
         const all_rows = try table.select(self.connection.allocator);
         defer {
@@ -614,15 +837,21 @@ pub const VirtualMachine = struct {
                     values_cloned = i + 1;
                 }
 
-                // Apply assignments
+                // Apply assignments - look up column by name to get correct index
                 for (update.assignments) |assignment| {
-                    // For simplicity, update the first column (in a real implementation,
-                    // we'd need proper column name to index mapping from the table schema)
-                    if (updated_values.len > 0) {
-                        updated_values[0].deinit(self.connection.allocator);
-                        updated_values[0] = try self.cloneValue(assignment.value);
+                    var col_idx: ?usize = null;
+                    for (table.schema.columns, 0..) |col, idx| {
+                        if (std.mem.eql(u8, col.name, assignment.column)) {
+                            col_idx = idx;
+                            break;
+                        }
                     }
-                    _ = assignment.column; // Suppress unused warning for now
+                    if (col_idx) |idx| {
+                        if (idx < updated_values.len) {
+                            updated_values[idx].deinit(self.connection.allocator);
+                            updated_values[idx] = try self.cloneValue(assignment.value);
+                        }
+                    }
                 }
 
                 try updated_rows.append(self.connection.allocator, storage.Row{ .values = updated_values });
@@ -718,6 +947,9 @@ pub const VirtualMachine = struct {
         const table = self.connection.storage_engine.getTable(delete.table_name) orelse {
             return error.TableNotFound;
         };
+
+        // Track the current table for column name resolution in condition evaluation
+        self.current_table = table;
 
         // Get all current rows
         const all_rows = try table.select(self.connection.allocator);
@@ -840,7 +1072,7 @@ pub const VirtualMachine = struct {
     }
 
     /// Evaluate a condition against a row
-    fn evaluateCondition(self: *Self, condition: *const ast.Condition, row: *const storage.Row) !bool {
+    fn evaluateCondition(self: *Self, condition: *const ast.Condition, row: *const storage.Row) anyerror!bool {
         return switch (condition.*) {
             .Comparison => |*comp| try self.evaluateComparison(comp, row),
             .Logical => |*logical| {
@@ -859,8 +1091,32 @@ pub const VirtualMachine = struct {
     fn evaluateComparison(self: *Self, comp: *const ast.ComparisonCondition, row: *const storage.Row) !bool {
         const left_value = try self.evaluateExpression(&comp.left, row);
         defer left_value.deinit(self.connection.allocator);
+
+        // Handle IS NULL / IS NOT NULL (don't need to evaluate right side)
+        if (comp.operator == .IsNull) {
+            return left_value == .Null;
+        }
+        if (comp.operator == .IsNotNull) {
+            return left_value != .Null;
+        }
+
         const right_value = try self.evaluateExpression(&comp.right, row);
         defer right_value.deinit(self.connection.allocator);
+
+        // Handle BETWEEN / NOT BETWEEN
+        if (comp.operator == .Between or comp.operator == .NotBetween) {
+            if (comp.extra) |extra_expr| {
+                const high_value = try self.evaluateExpression(&extra_expr, row);
+                defer high_value.deinit(self.connection.allocator);
+
+                const cmp_low = self.compareValues(left_value, right_value);
+                const cmp_high = self.compareValues(left_value, high_value);
+                const in_range = (cmp_low == .gt or cmp_low == .eq) and (cmp_high == .lt or cmp_high == .eq);
+
+                return if (comp.operator == .Between) in_range else !in_range;
+            }
+            return false;
+        }
 
         return switch (comp.operator) {
             .Equal => self.compareValues(left_value, right_value) == .eq,
@@ -875,29 +1131,363 @@ pub const VirtualMachine = struct {
                 const cmp = self.compareValues(left_value, right_value);
                 return cmp == .gt or cmp == .eq;
             },
-            .Like => {
-                // Simple LIKE implementation (would need pattern matching)
+            .Like => self.evaluateLike(left_value, right_value, false),
+            .NotLike => self.evaluateLike(left_value, right_value, true),
+            .In => {
+                // Simple IN implementation - check equality
                 return self.compareValues(left_value, right_value) == .eq;
             },
-            .In => {
-                // Simple IN implementation
-                return self.compareValues(left_value, right_value) == .eq;
+            .NotIn => {
+                // Simple NOT IN implementation
+                return self.compareValues(left_value, right_value) != .eq;
+            },
+            .IsNull, .IsNotNull, .Between, .NotBetween => unreachable, // Already handled above
+        };
+    }
+
+    /// Evaluate LIKE pattern matching with % and _ wildcards
+    fn evaluateLike(self: *Self, value: storage.Value, pattern: storage.Value, negate: bool) bool {
+        _ = self;
+        const text = switch (value) {
+            .Text => |t| t,
+            else => return if (negate) true else false,
+        };
+        const pat = switch (pattern) {
+            .Text => |p| p,
+            else => return if (negate) true else false,
+        };
+
+        const matches = likeMatch(text, pat);
+        return if (negate) !matches else matches;
+    }
+
+    /// Evaluate CASE WHEN ... THEN ... ELSE ... END expression
+    fn evaluateCaseExpression(self: *Self, case_expr: *const ast.CaseExpression, row: *const storage.Row) anyerror!storage.Value {
+        // Evaluate each WHEN branch
+        for (case_expr.branches) |branch| {
+            const condition_result = try self.evaluateCondition(branch.condition, row);
+            if (condition_result) {
+                // Return the result value for this branch
+                return try self.evaluateAstValue(&branch.result, row);
+            }
+        }
+
+        // No branch matched - return ELSE value or NULL
+        if (case_expr.else_result) |else_val| {
+            return try self.evaluateAstValue(else_val, row);
+        }
+        return storage.Value.Null;
+    }
+
+    /// Evaluate an AST Value to a storage Value
+    fn evaluateAstValue(self: *Self, value: *const ast.Value, row: *const storage.Row) anyerror!storage.Value {
+        return switch (value.*) {
+            .Integer => |i| storage.Value{ .Integer = i },
+            .Text => |t| storage.Value{ .Text = try self.connection.allocator.dupe(u8, t) },
+            .Real => |r| storage.Value{ .Real = r },
+            .Blob => |b| storage.Value{ .Blob = try self.connection.allocator.dupe(u8, b) },
+            .Null => storage.Value.Null,
+            .Parameter => |param_index| {
+                if (self.parameters) |params| {
+                    if (param_index < params.len) {
+                        return try self.resolveValue(params[param_index]);
+                    }
+                }
+                return storage.Value.Null;
+            },
+            .FunctionCall => |function_call| {
+                return try self.function_evaluator.evaluateFunction(function_call);
+            },
+            .Case => |case_expr| {
+                return try self.evaluateCaseExpression(&case_expr, row);
             },
         };
+    }
+
+    /// Evaluate a function call with row context (resolves column references)
+    fn evaluateFunctionWithRow(self: *Self, func_call: ast.FunctionCall, row: *const storage.Row) anyerror!storage.Value {
+        const func_name = func_call.name;
+
+        // Convert function name to lowercase for case-insensitive comparison
+        const lower_name = try std.ascii.allocLowerString(self.connection.allocator, func_name);
+        defer self.connection.allocator.free(lower_name);
+
+        if (std.mem.eql(u8, lower_name, "coalesce")) {
+            return self.evalCoalesceWithRow(func_call.arguments, row);
+        } else if (std.mem.eql(u8, lower_name, "nullif")) {
+            return self.evalNullifWithRow(func_call.arguments, row);
+        } else if (std.mem.eql(u8, lower_name, "ifnull")) {
+            return self.evalIfnullWithRow(func_call.arguments, row);
+        } else if (std.mem.eql(u8, lower_name, "upper")) {
+            return self.evalUpperWithRow(func_call.arguments, row);
+        } else if (std.mem.eql(u8, lower_name, "lower")) {
+            return self.evalLowerWithRow(func_call.arguments, row);
+        } else if (std.mem.eql(u8, lower_name, "substr") or std.mem.eql(u8, lower_name, "substring")) {
+            return self.evalSubstrWithRow(func_call.arguments, row);
+        } else if (std.mem.eql(u8, lower_name, "length")) {
+            return self.evalLengthWithRow(func_call.arguments, row);
+        } else if (std.mem.eql(u8, lower_name, "trim")) {
+            return self.evalTrimWithRow(func_call.arguments, row);
+        } else {
+            // For other functions, use the regular function evaluator
+            return try self.function_evaluator.evaluateFunction(func_call);
+        }
+    }
+
+    /// COALESCE with row context
+    fn evalCoalesceWithRow(self: *Self, arguments: []ast.FunctionArgument, row: *const storage.Row) anyerror!storage.Value {
+        if (arguments.len == 0) {
+            return error.InvalidArgumentCount;
+        }
+
+        for (arguments) |arg| {
+            const value = try self.resolveArgumentWithRow(arg, row);
+            switch (value) {
+                .Null => {
+                    value.deinit(self.connection.allocator);
+                    continue;
+                },
+                else => return value,
+            }
+        }
+
+        return storage.Value.Null;
+    }
+
+    /// NULLIF with row context
+    fn evalNullifWithRow(self: *Self, arguments: []ast.FunctionArgument, row: *const storage.Row) anyerror!storage.Value {
+        if (arguments.len != 2) {
+            return error.InvalidArgumentCount;
+        }
+
+        const a = try self.resolveArgumentWithRow(arguments[0], row);
+        const b = try self.resolveArgumentWithRow(arguments[1], row);
+        defer b.deinit(self.connection.allocator);
+
+        // Compare values
+        const are_equal = self.valuesEqual(a, b);
+
+        if (are_equal) {
+            a.deinit(self.connection.allocator);
+            return storage.Value.Null;
+        } else {
+            return a;
+        }
+    }
+
+    /// IFNULL with row context
+    fn evalIfnullWithRow(self: *Self, arguments: []ast.FunctionArgument, row: *const storage.Row) anyerror!storage.Value {
+        if (arguments.len != 2) {
+            return error.InvalidArgumentCount;
+        }
+
+        const a = try self.resolveArgumentWithRow(arguments[0], row);
+
+        switch (a) {
+            .Null => {
+                return try self.resolveArgumentWithRow(arguments[1], row);
+            },
+            else => return a,
+        }
+    }
+
+    /// Resolve a function argument to a storage value with row context
+    fn resolveArgumentWithRow(self: *Self, arg: ast.FunctionArgument, row: *const storage.Row) anyerror!storage.Value {
+        return switch (arg) {
+            .Literal => |value| {
+                return switch (value) {
+                    .Integer => |i| storage.Value{ .Integer = i },
+                    .Real => |r| storage.Value{ .Real = r },
+                    .Text => |t| storage.Value{ .Text = try self.connection.allocator.dupe(u8, t) },
+                    .Blob => |b| storage.Value{ .Blob = try self.connection.allocator.dupe(u8, b) },
+                    .Null => storage.Value.Null,
+                    .Parameter => |param_index| {
+                        if (self.parameters) |params| {
+                            if (param_index < params.len) {
+                                return try self.resolveValue(params[param_index]);
+                            }
+                        }
+                        return storage.Value.Null;
+                    },
+                    .FunctionCall => |func| try self.evaluateFunctionWithRow(func, row),
+                    .Case => |case_expr| try self.evaluateCaseExpression(&case_expr, row),
+                };
+            },
+            .String => |s| storage.Value{ .Text = try self.connection.allocator.dupe(u8, s) },
+            .Column => |col_name| {
+                // Look up column by name in current row using table schema
+                if (self.current_table) |table| {
+                    for (table.schema.columns, 0..) |col, idx| {
+                        if (std.mem.eql(u8, col.name, col_name)) {
+                            if (idx < row.values.len) {
+                                return try self.cloneValue(row.values[idx]);
+                            } else {
+                                return storage.Value.Null;
+                            }
+                        }
+                    }
+                }
+                return storage.Value.Null;
+            },
+            else => storage.Value.Null,
+        };
+    }
+
+    /// Compare two storage values for equality
+    fn valuesEqual(self: *Self, a: storage.Value, b: storage.Value) bool {
+        _ = self;
+        // If types don't match, they're not equal
+        if (@as(std.meta.Tag(storage.Value), a) != @as(std.meta.Tag(storage.Value), b)) {
+            return false;
+        }
+
+        return switch (a) {
+            .Integer => |i| i == b.Integer,
+            .Real => |r| r == b.Real,
+            .Text => |t| std.mem.eql(u8, t, b.Text),
+            .Blob => |bl| std.mem.eql(u8, bl, b.Blob),
+            .Null => true, // NULL = NULL is true for NULLIF
+            else => false,
+        };
+    }
+
+    /// UPPER with row context
+    fn evalUpperWithRow(self: *Self, arguments: []ast.FunctionArgument, row: *const storage.Row) anyerror!storage.Value {
+        if (arguments.len != 1) {
+            return error.InvalidArgumentCount;
+        }
+
+        const value = try self.resolveArgumentWithRow(arguments[0], row);
+        defer value.deinit(self.connection.allocator);
+
+        switch (value) {
+            .Text => |text| {
+                const upper = try std.ascii.allocUpperString(self.connection.allocator, text);
+                return storage.Value{ .Text = upper };
+            },
+            .Null => return storage.Value.Null,
+            else => return error.InvalidArgumentType,
+        }
+    }
+
+    /// LOWER with row context
+    fn evalLowerWithRow(self: *Self, arguments: []ast.FunctionArgument, row: *const storage.Row) anyerror!storage.Value {
+        if (arguments.len != 1) {
+            return error.InvalidArgumentCount;
+        }
+
+        const value = try self.resolveArgumentWithRow(arguments[0], row);
+        defer value.deinit(self.connection.allocator);
+
+        switch (value) {
+            .Text => |text| {
+                const lower = try std.ascii.allocLowerString(self.connection.allocator, text);
+                return storage.Value{ .Text = lower };
+            },
+            .Null => return storage.Value.Null,
+            else => return error.InvalidArgumentType,
+        }
+    }
+
+    /// SUBSTR(str, start, length) or SUBSTR(str, start) with row context
+    fn evalSubstrWithRow(self: *Self, arguments: []ast.FunctionArgument, row: *const storage.Row) anyerror!storage.Value {
+        if (arguments.len < 2 or arguments.len > 3) {
+            return error.InvalidArgumentCount;
+        }
+
+        const str_value = try self.resolveArgumentWithRow(arguments[0], row);
+        defer str_value.deinit(self.connection.allocator);
+
+        switch (str_value) {
+            .Text => |text| {
+                const start_value = try self.resolveArgumentWithRow(arguments[1], row);
+                defer start_value.deinit(self.connection.allocator);
+
+                const start: usize = switch (start_value) {
+                    .Integer => |i| if (i < 1) 0 else @as(usize, @intCast(i - 1)), // SQL is 1-indexed
+                    else => return error.InvalidArgumentType,
+                };
+
+                var length: usize = text.len;
+                if (arguments.len == 3) {
+                    const len_value = try self.resolveArgumentWithRow(arguments[2], row);
+                    defer len_value.deinit(self.connection.allocator);
+                    length = switch (len_value) {
+                        .Integer => |i| if (i < 0) 0 else @as(usize, @intCast(i)),
+                        else => return error.InvalidArgumentType,
+                    };
+                }
+
+                if (start >= text.len) {
+                    return storage.Value{ .Text = try self.connection.allocator.dupe(u8, "") };
+                }
+
+                const end = @min(start + length, text.len);
+                return storage.Value{ .Text = try self.connection.allocator.dupe(u8, text[start..end]) };
+            },
+            .Null => return storage.Value.Null,
+            else => return error.InvalidArgumentType,
+        }
+    }
+
+    /// LENGTH with row context
+    fn evalLengthWithRow(self: *Self, arguments: []ast.FunctionArgument, row: *const storage.Row) anyerror!storage.Value {
+        if (arguments.len != 1) {
+            return error.InvalidArgumentCount;
+        }
+
+        const value = try self.resolveArgumentWithRow(arguments[0], row);
+        defer value.deinit(self.connection.allocator);
+
+        switch (value) {
+            .Text => |text| {
+                return storage.Value{ .Integer = @as(i64, @intCast(text.len)) };
+            },
+            .Blob => |blob| {
+                return storage.Value{ .Integer = @as(i64, @intCast(blob.len)) };
+            },
+            .Null => return storage.Value.Null,
+            else => return error.InvalidArgumentType,
+        }
+    }
+
+    /// TRIM with row context (removes leading and trailing spaces)
+    fn evalTrimWithRow(self: *Self, arguments: []ast.FunctionArgument, row: *const storage.Row) anyerror!storage.Value {
+        if (arguments.len != 1) {
+            return error.InvalidArgumentCount;
+        }
+
+        const value = try self.resolveArgumentWithRow(arguments[0], row);
+        defer value.deinit(self.connection.allocator);
+
+        switch (value) {
+            .Text => |text| {
+                const trimmed = std.mem.trim(u8, text, " \t\n\r");
+                return storage.Value{ .Text = try self.connection.allocator.dupe(u8, trimmed) };
+            },
+            .Null => return storage.Value.Null,
+            else => return error.InvalidArgumentType,
+        }
     }
 
     /// Evaluate an expression against a row
     fn evaluateExpression(self: *Self, expression: *const ast.Expression, row: *const storage.Row) !storage.Value {
         return switch (expression.*) {
             .Column => |col_name| {
-                // For now, just return the first value (would need column mapping)
-                _ = col_name;
-                if (row.values.len > 0) {
-                    // Clone the value so it can be safely freed by caller
-                    return try self.cloneValue(row.values[0]);
-                } else {
-                    return storage.Value.Null;
+                // Look up column by name using current table schema
+                if (self.current_table) |table| {
+                    for (table.schema.columns, 0..) |col, idx| {
+                        if (std.mem.eql(u8, col.name, col_name)) {
+                            if (idx < row.values.len) {
+                                return try self.cloneValue(row.values[idx]);
+                            } else {
+                                return storage.Value.Null;
+                            }
+                        }
+                    }
                 }
+                // Fallback: if no table or column not found, return Null
+                return storage.Value.Null;
             },
             .Literal => |value| {
                 return switch (value) {
@@ -920,6 +1510,10 @@ pub const VirtualMachine = struct {
                     .FunctionCall => |function_call| {
                         // Evaluate function call immediately
                         return try self.function_evaluator.evaluateFunction(function_call);
+                    },
+                    .Case => |case_expr| {
+                        // Evaluate CASE expression
+                        return try self.evaluateCaseExpression(&case_expr, row);
                     },
                 };
             },
@@ -1156,32 +1750,200 @@ pub const VirtualMachine = struct {
             self.connection.allocator.free(right_rows);
         }
 
-        // Build hash table from smaller table (right table for now)
-        var hash_map = std.AutoHashMap(u64, std.ArrayList(storage.Row)).init(self.connection.allocator);
+        // Get column indices for join keys
+        const left_key_idx = left_table.getColumnIndex(join.left_key_column) orelse {
+            // Fall back to nested loop if column not found
+            var nested_join = planner.NestedLoopJoinStep{
+                .join_type = join.join_type,
+                .left_table = join.left_table,
+                .right_table = join.right_table,
+                .condition = join.condition,
+            };
+            return self.executeNestedLoopJoin(&nested_join, result);
+        };
+
+        const right_key_idx = right_table.getColumnIndex(join.right_key_column) orelse {
+            // Fall back to nested loop if column not found
+            var nested_join = planner.NestedLoopJoinStep{
+                .join_type = join.join_type,
+                .left_table = join.left_table,
+                .right_table = join.right_table,
+                .condition = join.condition,
+            };
+            return self.executeNestedLoopJoin(&nested_join, result);
+        };
+
+        // Build hash table from right table (the "build" side)
+        // Key: hash of join key value, Value: list of row indices with that key
+        var hash_map = std.AutoHashMap(u64, std.ArrayList(usize)).init(self.connection.allocator);
         defer {
-            var iterator = hash_map.iterator();
-            while (iterator.next()) |entry| {
-                for (entry.value_ptr.items) |row| {
-                    for (row.values) |value| {
-                        value.deinit(self.connection.allocator);
-                    }
-                    self.connection.allocator.free(row.values);
-                }
-                entry.value_ptr.deinit(self.connection.allocator);
+            var iterator = hash_map.valueIterator();
+            while (iterator.next()) |list| {
+                list.deinit(self.connection.allocator);
             }
             hash_map.deinit();
         }
 
-        // TODO: For now, fall back to nested loop join
-        // Hash join implementation requires column index resolution
-        // which needs schema information
-        var nested_join = planner.NestedLoopJoinStep{
-            .join_type = join.join_type,
-            .left_table = join.left_table,
-            .right_table = join.right_table,
-            .condition = join.condition,
+        // Build phase: hash the right table's join key values
+        for (right_rows, 0..) |row, row_idx| {
+            if (right_key_idx < row.values.len) {
+                const key_value = row.values[right_key_idx];
+                const hash = hashValue(key_value);
+
+                const entry = try hash_map.getOrPut(hash);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = .{};
+                }
+                try entry.value_ptr.append(self.connection.allocator, row_idx);
+            }
+        }
+
+        // Probe phase: for each left row, look up matching right rows
+        for (left_rows) |left_row| {
+            if (left_key_idx >= left_row.values.len) continue;
+
+            const left_key_value = left_row.values[left_key_idx];
+            const hash = hashValue(left_key_value);
+
+            var matched = false;
+
+            if (hash_map.get(hash)) |matching_indices| {
+                for (matching_indices.items) |right_idx| {
+                    const right_row = right_rows[right_idx];
+
+                    // Verify the actual values match (not just hash)
+                    if (right_key_idx < right_row.values.len) {
+                        const right_key_value = right_row.values[right_key_idx];
+                        if (hashValuesEqual(left_key_value, right_key_value)) {
+                            // Found a match - combine rows
+                            const combined = try self.combineRows(&left_row, &right_row);
+                            try result.rows.append(self.connection.allocator, combined);
+                            matched = true;
+                        }
+                    }
+                }
+            }
+
+            // Handle LEFT JOIN - include left row even if no match
+            if (!matched and join.join_type == .Left) {
+                const right_null_count = if (right_rows.len > 0) right_rows[0].values.len else 0;
+                const combined = try self.combineRowWithNulls(&left_row, right_null_count);
+                try result.rows.append(self.connection.allocator, combined);
+            }
+        }
+
+        // Handle RIGHT JOIN - include unmatched right rows
+        if (join.join_type == .Right or join.join_type == .Full) {
+            var matched_right = try self.connection.allocator.alloc(bool, right_rows.len);
+            defer self.connection.allocator.free(matched_right);
+            @memset(matched_right, false);
+
+            // Re-probe to find matched right rows
+            for (left_rows) |left_row| {
+                if (left_key_idx >= left_row.values.len) continue;
+                const left_key_value = left_row.values[left_key_idx];
+                const hash = hashValue(left_key_value);
+
+                if (hash_map.get(hash)) |matching_indices| {
+                    for (matching_indices.items) |right_idx| {
+                        const right_row = right_rows[right_idx];
+                        if (right_key_idx < right_row.values.len) {
+                            const right_key_value = right_row.values[right_key_idx];
+                            if (hashValuesEqual(left_key_value, right_key_value)) {
+                                matched_right[right_idx] = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Add unmatched right rows with NULL left columns
+            const left_null_count = if (left_rows.len > 0) left_rows[0].values.len else 0;
+            for (right_rows, 0..) |right_row, idx| {
+                if (!matched_right[idx]) {
+                    const combined = try self.combineNullsWithRow(left_null_count, &right_row);
+                    try result.rows.append(self.connection.allocator, combined);
+                }
+            }
+        }
+    }
+
+    /// Hash a storage value for hash join
+    fn hashValue(value: storage.Value) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        switch (value) {
+            .Integer => |i| hasher.update(std.mem.asBytes(&i)),
+            .Real => |r| hasher.update(std.mem.asBytes(&r)),
+            .Text => |t| hasher.update(t),
+            .Blob => |b| hasher.update(b),
+            .Null => hasher.update(&[_]u8{0}),
+            .Boolean => |b| hasher.update(&[_]u8{if (b) 1 else 0}),
+            else => hasher.update(&[_]u8{0}),
+        }
+        return hasher.final();
+    }
+
+    /// Check if two values are equal (for hash join verification)
+    fn hashValuesEqual(a: storage.Value, b: storage.Value) bool {
+        return switch (a) {
+            .Integer => |ia| switch (b) {
+                .Integer => |ib| ia == ib,
+                else => false,
+            },
+            .Real => |ra| switch (b) {
+                .Real => |rb| ra == rb,
+                else => false,
+            },
+            .Text => |ta| switch (b) {
+                .Text => |tb| std.mem.eql(u8, ta, tb),
+                else => false,
+            },
+            .Blob => |ba| switch (b) {
+                .Blob => |bb| std.mem.eql(u8, ba, bb),
+                else => false,
+            },
+            .Null => switch (b) {
+                .Null => true,
+                else => false,
+            },
+            .Boolean => |ba| switch (b) {
+                .Boolean => |bb| ba == bb,
+                else => false,
+            },
+            else => false,
         };
-        return self.executeNestedLoopJoin(&nested_join, result);
+    }
+
+    /// Combine a row with NULL values (for LEFT JOIN)
+    fn combineRowWithNulls(self: *Self, left: *const storage.Row, right_null_count: usize) !storage.Row {
+        const total_cols = left.values.len + right_null_count;
+        var combined_values = try self.connection.allocator.alloc(storage.Value, total_cols);
+
+        for (left.values, 0..) |value, i| {
+            combined_values[i] = try value.clone(self.connection.allocator);
+        }
+
+        for (left.values.len..total_cols) |i| {
+            combined_values[i] = storage.Value.Null;
+        }
+
+        return storage.Row{ .values = combined_values };
+    }
+
+    /// Combine NULL values with a row (for RIGHT JOIN)
+    fn combineNullsWithRow(self: *Self, left_null_count: usize, right: *const storage.Row) !storage.Row {
+        const total_cols = left_null_count + right.values.len;
+        var combined_values = try self.connection.allocator.alloc(storage.Value, total_cols);
+
+        for (0..left_null_count) |i| {
+            combined_values[i] = storage.Value.Null;
+        }
+
+        for (right.values, 0..) |value, i| {
+            combined_values[left_null_count + i] = try value.clone(self.connection.allocator);
+        }
+
+        return storage.Row{ .values = combined_values };
     }
 
     /// Combine two rows into a single row
@@ -1769,6 +2531,173 @@ pub const VirtualMachine = struct {
         // Drop the table
         try self.connection.storage_engine.dropTable(drop_tbl.table_name);
     }
+
+    /// Execute PRAGMA statement
+    fn executePragma(self: *Self, pragma: *planner.PragmaStep, result: *ExecutionResult) !void {
+        const allocator = self.connection.allocator;
+
+        // Handle different PRAGMA commands
+        if (std.ascii.eqlIgnoreCase(pragma.name, "table_info")) {
+            // PRAGMA table_info(table_name)
+            // Returns: cid, name, type, notnull, dflt_value, pk
+            const table_name = pragma.argument orelse return error.PragmaRequiresArgument;
+
+            const table = self.connection.storage_engine.getTable(table_name) orelse {
+                return error.TableNotFound;
+            };
+
+            // Generate rows for each column in the table
+            for (table.schema.columns, 0..) |column, cid| {
+                var row_values: std.ArrayList(storage.Value) = .{};
+
+                // cid (column index)
+                try row_values.append(allocator, storage.Value{ .Integer = @intCast(cid) });
+
+                // name (column name)
+                try row_values.append(allocator, storage.Value{ .Text = try allocator.dupe(u8, column.name) });
+
+                // type (data type as string)
+                const type_str = switch (column.data_type) {
+                    .Integer => "INTEGER",
+                    .Text => "TEXT",
+                    .Real => "REAL",
+                    .Blob => "BLOB",
+                    .JSON => "JSON",
+                    .JSONB => "JSONB",
+                    .UUID => "UUID",
+                    .Array => "ARRAY",
+                    .TimestampTZ => "TIMESTAMPTZ",
+                    .Interval => "INTERVAL",
+                    .Numeric => "NUMERIC",
+                    .Boolean => "BOOLEAN",
+                    .Timestamp => "TIMESTAMP",
+                    .Date => "DATE",
+                    .Time => "TIME",
+                    .SmallInt => "SMALLINT",
+                    .BigInt => "BIGINT",
+                    .Varchar => "VARCHAR",
+                    .Char => "CHAR",
+                };
+                try row_values.append(allocator, storage.Value{ .Text = try allocator.dupe(u8, type_str) });
+
+                // notnull (1 if NOT NULL, 0 otherwise)
+                try row_values.append(allocator, storage.Value{ .Integer = if (column.is_nullable) 0 else 1 });
+
+                // dflt_value (default value or NULL)
+                if (column.default_value) |default| {
+                    switch (default) {
+                        .Literal => |lit_value| {
+                            try row_values.append(allocator, try lit_value.clone(allocator));
+                        },
+                        .FunctionCall => |func| {
+                            // Represent function call as text
+                            try row_values.append(allocator, storage.Value{ .Text = try allocator.dupe(u8, func.name) });
+                        },
+                    }
+                } else {
+                    try row_values.append(allocator, storage.Value.Null);
+                }
+
+                // pk (1 if primary key, 0 otherwise)
+                try row_values.append(allocator, storage.Value{ .Integer = if (column.is_primary_key) 1 else 0 });
+
+                try result.rows.append(allocator, storage.Row{
+                    .values = try row_values.toOwnedSlice(allocator),
+                });
+            }
+        } else if (std.ascii.eqlIgnoreCase(pragma.name, "database_list")) {
+            // PRAGMA database_list
+            // Returns: seq, name, file
+            var row_values: std.ArrayList(storage.Value) = .{};
+            try row_values.append(allocator, storage.Value{ .Integer = 0 }); // seq
+            try row_values.append(allocator, storage.Value{ .Text = try allocator.dupe(u8, "main") }); // name
+            try row_values.append(allocator, storage.Value{ .Text = try allocator.dupe(u8, ":memory:") }); // file
+
+            try result.rows.append(allocator, storage.Row{
+                .values = try row_values.toOwnedSlice(allocator),
+            });
+        } else if (std.ascii.eqlIgnoreCase(pragma.name, "table_list")) {
+            // PRAGMA table_list
+            // Returns: schema, name, type, ncol, wr, strict
+            var table_iter = self.connection.storage_engine.tables.iterator();
+            while (table_iter.next()) |entry| {
+                const table_name = entry.key_ptr.*;
+                const table = entry.value_ptr.*;
+                var row_values: std.ArrayList(storage.Value) = .{};
+
+                try row_values.append(allocator, storage.Value{ .Text = try allocator.dupe(u8, "main") }); // schema
+                try row_values.append(allocator, storage.Value{ .Text = try allocator.dupe(u8, table_name) }); // name
+                try row_values.append(allocator, storage.Value{ .Text = try allocator.dupe(u8, "table") }); // type
+                try row_values.append(allocator, storage.Value{ .Integer = @intCast(table.schema.columns.len) }); // ncol
+                try row_values.append(allocator, storage.Value{ .Integer = 0 }); // wr (without rowid)
+                try row_values.append(allocator, storage.Value{ .Integer = 0 }); // strict
+
+                try result.rows.append(allocator, storage.Row{
+                    .values = try row_values.toOwnedSlice(allocator),
+                });
+            }
+        } else {
+            return error.UnknownPragma;
+        }
+    }
+
+    /// Execute EXPLAIN / EXPLAIN QUERY PLAN statement
+    fn executeExplain(self: *Self, explain: *planner.ExplainStep, result: *ExecutionResult) !void {
+        const allocator = self.connection.allocator;
+
+        // EXPLAIN QUERY PLAN returns: id, parent, notused, detail
+        // EXPLAIN returns: addr, opcode, p1, p2, p3, p4, p5, comment
+        // We'll use the simpler EXPLAIN QUERY PLAN format for now
+
+        for (explain.inner_steps, 0..) |step, step_idx| {
+            var row_values: std.ArrayList(storage.Value) = .{};
+
+            // id (step index)
+            try row_values.append(allocator, storage.Value{ .Integer = @intCast(step_idx) });
+
+            // parent (0 for top-level steps)
+            try row_values.append(allocator, storage.Value{ .Integer = 0 });
+
+            // notused (always 0 for compatibility)
+            try row_values.append(allocator, storage.Value{ .Integer = 0 });
+
+            // detail (description of what this step does)
+            const detail = try self.describeStep(&step, allocator);
+            try row_values.append(allocator, storage.Value{ .Text = detail });
+
+            try result.rows.append(allocator, storage.Row{
+                .values = try row_values.toOwnedSlice(allocator),
+            });
+        }
+    }
+
+    /// Generate a human-readable description of an execution step
+    fn describeStep(self: *Self, step: *const planner.ExecutionStep, allocator: std.mem.Allocator) ![]const u8 {
+        _ = self;
+        return switch (step.*) {
+            .TableScan => |scan| try std.fmt.allocPrint(allocator, "SCAN TABLE {s}", .{scan.table_name}),
+            .Filter => try allocator.dupe(u8, "FILTER"),
+            .Project => try allocator.dupe(u8, "PROJECT"),
+            .Limit => |limit| try std.fmt.allocPrint(allocator, "LIMIT {d}", .{limit.count}),
+            .Insert => |insert| try std.fmt.allocPrint(allocator, "INSERT INTO {s}", .{insert.table_name}),
+            .CreateTable => |create| try std.fmt.allocPrint(allocator, "CREATE TABLE {s}", .{create.table_name}),
+            .Update => |update| try std.fmt.allocPrint(allocator, "UPDATE {s}", .{update.table_name}),
+            .Delete => |del| try std.fmt.allocPrint(allocator, "DELETE FROM {s}", .{del.table_name}),
+            .NestedLoopJoin => |join| try std.fmt.allocPrint(allocator, "NESTED LOOP JOIN {s} WITH {s}", .{ join.left_table, join.right_table }),
+            .HashJoin => |join| try std.fmt.allocPrint(allocator, "HASH JOIN {s} WITH {s}", .{ join.left_table, join.right_table }),
+            .Aggregate => try allocator.dupe(u8, "AGGREGATE"),
+            .GroupBy => try allocator.dupe(u8, "GROUP BY"),
+            .BeginTransaction => try allocator.dupe(u8, "BEGIN TRANSACTION"),
+            .Commit => try allocator.dupe(u8, "COMMIT"),
+            .Rollback => try allocator.dupe(u8, "ROLLBACK"),
+            .CreateIndex => |idx| try std.fmt.allocPrint(allocator, "CREATE INDEX {s} ON {s}", .{ idx.index_name, idx.table_name }),
+            .DropIndex => |idx| try std.fmt.allocPrint(allocator, "DROP INDEX {s}", .{idx.index_name}),
+            .DropTable => |drop| try std.fmt.allocPrint(allocator, "DROP TABLE {s}", .{drop.table_name}),
+            .CreateCTE => |cte| try std.fmt.allocPrint(allocator, "CREATE CTE {s}", .{cte.name}),
+            .Pragma => |pragma| try std.fmt.allocPrint(allocator, "PRAGMA {s}", .{pragma.name}),
+            .Explain => try allocator.dupe(u8, "EXPLAIN"),
+        };
+    }
 };
 
 /// Result of query execution
@@ -1803,6 +2732,49 @@ pub const ExecutionResult = struct {
         // Cleanup completed
     }
 };
+
+/// SQL LIKE pattern matching with % and _ wildcards
+/// % matches zero or more characters
+/// _ matches exactly one character
+fn likeMatch(text: []const u8, pattern: []const u8) bool {
+    var ti: usize = 0;
+    var pi: usize = 0;
+    var star_pi: ?usize = null;
+    var star_ti: usize = 0;
+
+    while (ti < text.len) {
+        if (pi < pattern.len) {
+            const pc = pattern[pi];
+            if (pc == '%') {
+                // Remember position for backtracking
+                star_pi = pi;
+                star_ti = ti;
+                pi += 1;
+                continue;
+            } else if (pc == '_' or std.ascii.toLower(pc) == std.ascii.toLower(text[ti])) {
+                // Match single character or exact match (case-insensitive)
+                ti += 1;
+                pi += 1;
+                continue;
+            }
+        }
+        // No match - try backtracking to last %
+        if (star_pi) |sp| {
+            pi = sp + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
+        }
+    }
+
+    // Skip trailing % in pattern
+    while (pi < pattern.len and pattern[pi] == '%') {
+        pi += 1;
+    }
+
+    return pi == pattern.len;
+}
 
 /// VM errors
 const VmError = error{

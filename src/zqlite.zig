@@ -143,6 +143,12 @@ pub fn createQueryCache(allocator: std.mem.Allocator, max_entries: usize, max_me
     return query_cache.QueryCache.init(allocator, max_entries, max_memory_bytes);
 }
 
+/// Query hasher for cache key generation (requires performance feature)
+pub const QueryHasher = if (build_options.enable_performance)
+    query_cache.QueryHasher
+else
+    @compileError("QueryHasher requires -Dperformance=true or profile=advanced/full");
+
 /// Generate UUID v4
 pub fn generateUUID(random: std.Random) [16]u8 {
     return ast.UUIDUtils.generateV4(random);
@@ -173,7 +179,7 @@ pub fn printBuildInfo() void {
 
 // Tests
 test "zqlite version info" {
-    try std.testing.expect(std.mem.eql(u8, version.VERSION_STRING, "1.3.5"));
+    try std.testing.expect(std.mem.eql(u8, version.VERSION_STRING, "1.5.0"));
 }
 
 test "build info contains version" {

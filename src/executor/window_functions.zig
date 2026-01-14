@@ -9,6 +9,14 @@ pub const WindowContext = struct {
     current_row: usize,
     partition_start: usize,
     partition_end: usize,
+    /// ORDER BY clauses for ranking functions
+    order_by: ?[]const ast.OrderByClause,
+    /// Column name to index mapping for the current table
+    column_indices: ?std.StringHashMap(usize),
+    /// Precomputed ranks for ORDER BY (computed once per partition)
+    ranks: ?[]u32,
+    /// Precomputed dense ranks for ORDER BY
+    dense_ranks: ?[]u32,
 
     pub fn init(allocator: std.mem.Allocator, rows: []storage.Row) WindowContext {
         return WindowContext{
@@ -17,9 +25,195 @@ pub const WindowContext = struct {
             .current_row = 0,
             .partition_start = 0,
             .partition_end = rows.len,
+            .order_by = null,
+            .column_indices = null,
+            .ranks = null,
+            .dense_ranks = null,
         };
     }
+
+    /// Initialize with ORDER BY clause for ranking computations
+    pub fn initWithOrderBy(
+        allocator: std.mem.Allocator,
+        rows: []storage.Row,
+        order_by: ?[]const ast.OrderByClause,
+        column_indices: ?std.StringHashMap(usize),
+    ) !WindowContext {
+        var ctx = WindowContext{
+            .allocator = allocator,
+            .rows = rows,
+            .current_row = 0,
+            .partition_start = 0,
+            .partition_end = rows.len,
+            .order_by = order_by,
+            .column_indices = column_indices,
+            .ranks = null,
+            .dense_ranks = null,
+        };
+
+        // Precompute ranks if we have ORDER BY
+        if (order_by != null and rows.len > 0) {
+            try ctx.computeRanks();
+        }
+
+        return ctx;
+    }
+
+    /// Compute RANK and DENSE_RANK values for all rows based on ORDER BY
+    fn computeRanks(self: *WindowContext) !void {
+        const n = self.partition_end - self.partition_start;
+        if (n == 0) return;
+
+        self.ranks = try self.allocator.alloc(u32, n);
+        self.dense_ranks = try self.allocator.alloc(u32, n);
+
+        // Create sorted indices based on ORDER BY
+        var indices = try self.allocator.alloc(usize, n);
+        defer self.allocator.free(indices);
+        for (0..n) |i| {
+            indices[i] = self.partition_start + i;
+        }
+
+        // Sort indices based on ORDER BY values
+        const sort_ctx = SortContext{
+            .rows = self.rows,
+            .order_by = self.order_by.?,
+            .column_indices = self.column_indices,
+        };
+        std.mem.sort(usize, indices, sort_ctx, compareFn);
+
+        // Assign ranks - same rank for equal values, RANK skips, DENSE_RANK doesn't
+        var current_rank: u32 = 1;
+        var current_dense_rank: u32 = 1;
+        var rows_at_current_rank: u32 = 0;
+
+        for (indices, 0..) |sorted_idx, i| {
+            const relative_idx = sorted_idx - self.partition_start;
+
+            if (i == 0) {
+                self.ranks.?[relative_idx] = 1;
+                self.dense_ranks.?[relative_idx] = 1;
+                rows_at_current_rank = 1;
+            } else {
+                const prev_idx = indices[i - 1];
+                const is_equal = areRowsEqual(self.rows, sorted_idx, prev_idx, self.order_by.?, self.column_indices);
+
+                if (is_equal) {
+                    // Same rank as previous
+                    self.ranks.?[relative_idx] = current_rank;
+                    self.dense_ranks.?[relative_idx] = current_dense_rank;
+                    rows_at_current_rank += 1;
+                } else {
+                    // New rank
+                    current_rank += rows_at_current_rank; // RANK skips
+                    current_dense_rank += 1; // DENSE_RANK doesn't skip
+                    self.ranks.?[relative_idx] = current_rank;
+                    self.dense_ranks.?[relative_idx] = current_dense_rank;
+                    rows_at_current_rank = 1;
+                }
+            }
+        }
+    }
+
+    pub fn deinit(self: *WindowContext) void {
+        if (self.ranks) |ranks| {
+            self.allocator.free(ranks);
+        }
+        if (self.dense_ranks) |dense_ranks| {
+            self.allocator.free(dense_ranks);
+        }
+    }
 };
+
+/// Context for sorting rows by ORDER BY clauses
+const SortContext = struct {
+    rows: []storage.Row,
+    order_by: []const ast.OrderByClause,
+    column_indices: ?std.StringHashMap(usize),
+};
+
+/// Compare function for sorting by ORDER BY
+fn compareFn(ctx: SortContext, a: usize, b: usize) bool {
+    const row_a = ctx.rows[a];
+    const row_b = ctx.rows[b];
+
+    for (ctx.order_by) |clause| {
+        const col_idx = if (ctx.column_indices) |indices|
+            indices.get(clause.column) orelse 0
+        else
+            0;
+
+        if (col_idx >= row_a.values.len or col_idx >= row_b.values.len) {
+            continue;
+        }
+
+        const val_a = row_a.values[col_idx];
+        const val_b = row_b.values[col_idx];
+
+        const order = compareValues(val_a, val_b);
+        if (order != .eq) {
+            const ascending = clause.direction == .Asc;
+            return if (ascending)
+                order == .lt
+            else
+                order == .gt;
+        }
+    }
+    return false; // Equal
+}
+
+/// Compare two storage values
+fn compareValues(a: storage.Value, b: storage.Value) std.math.Order {
+    return switch (a) {
+        .Integer => |ia| switch (b) {
+            .Integer => |ib| std.math.order(ia, ib),
+            .Real => |rb| std.math.order(@as(f64, @floatFromInt(ia)), rb),
+            .Null => .gt,
+            else => .gt,
+        },
+        .Real => |ra| switch (b) {
+            .Integer => |ib| std.math.order(ra, @as(f64, @floatFromInt(ib))),
+            .Real => |rb| std.math.order(ra, rb),
+            .Null => .gt,
+            else => .gt,
+        },
+        .Text => |ta| switch (b) {
+            .Text => |tb| std.mem.order(u8, ta, tb),
+            .Null => .gt,
+            else => .gt,
+        },
+        .Null => switch (b) {
+            .Null => .eq,
+            else => .lt,
+        },
+        else => .eq,
+    };
+}
+
+/// Check if two rows are equal based on ORDER BY columns
+fn areRowsEqual(rows: []storage.Row, idx_a: usize, idx_b: usize, order_by: []const ast.OrderByClause, column_indices: ?std.StringHashMap(usize)) bool {
+    const row_a = rows[idx_a];
+    const row_b = rows[idx_b];
+
+    for (order_by) |clause| {
+        const col_idx = if (column_indices) |indices|
+            indices.get(clause.column) orelse 0
+        else
+            0;
+
+        if (col_idx >= row_a.values.len or col_idx >= row_b.values.len) {
+            continue;
+        }
+
+        const val_a = row_a.values[col_idx];
+        const val_b = row_b.values[col_idx];
+
+        if (compareValues(val_a, val_b) != .eq) {
+            return false;
+        }
+    }
+    return true;
+}
 
 /// Window function executor
 pub const WindowExecutor = struct {
@@ -58,64 +252,170 @@ pub const WindowExecutor = struct {
     }
 
     /// Execute RANK() window function
+    /// RANK assigns the same rank to rows with equal ORDER BY values,
+    /// then skips the next ranks (e.g., 1, 1, 3 for two equal values)
     fn executeRank(self: *WindowExecutor, context: *WindowContext) !storage.Value {
         _ = self;
-        // For basic implementation, assume no ORDER BY, so all ranks are 1
-        // TODO: Implement proper ranking based on ORDER BY clause
+        if (context.ranks) |ranks| {
+            const relative_idx = context.current_row - context.partition_start;
+            if (relative_idx < ranks.len) {
+                return storage.Value{ .Integer = @intCast(ranks[relative_idx]) };
+            }
+        }
+        // Fallback: if no ORDER BY, row number equals rank
         const rank = context.current_row - context.partition_start + 1;
         return storage.Value{ .Integer = @intCast(rank) };
     }
 
     /// Execute DENSE_RANK() window function
+    /// DENSE_RANK assigns the same rank to rows with equal ORDER BY values,
+    /// without gaps (e.g., 1, 1, 2 for two equal values)
     fn executeDenseRank(self: *WindowExecutor, context: *WindowContext) !storage.Value {
         _ = self;
-        // For basic implementation, same as RANK
-        // TODO: Implement proper dense ranking based on ORDER BY clause
+        if (context.dense_ranks) |dense_ranks| {
+            const relative_idx = context.current_row - context.partition_start;
+            if (relative_idx < dense_ranks.len) {
+                return storage.Value{ .Integer = @intCast(dense_ranks[relative_idx]) };
+            }
+        }
+        // Fallback: if no ORDER BY, row number equals dense rank
         const dense_rank = context.current_row - context.partition_start + 1;
         return storage.Value{ .Integer = @intCast(dense_rank) };
     }
 
     /// Execute LEAD() window function
+    /// LEAD(column, offset, default) - returns value from a row offset rows after current row
     fn executeLead(self: *WindowExecutor, function: ast.WindowFunction, context: *WindowContext) !storage.Value {
-        _ = self;
-        _ = function;
+        // Parse arguments: LEAD(column, [offset], [default])
+        // offset defaults to 1, default value defaults to NULL
+        var offset: usize = 1;
+        var default_value: storage.Value = storage.Value.Null;
+        var column_idx: usize = 0;
 
-        const offset = 1; // Default lead offset
+        // First argument is the column to fetch
+        if (function.arguments.len > 0) {
+            switch (function.arguments[0]) {
+                .Column => |col_name| {
+                    if (context.column_indices) |indices| {
+                        column_idx = indices.get(col_name) orelse 0;
+                    }
+                },
+                .Literal => |lit| {
+                    // If literal is an integer, treat as column index
+                    if (lit == .Integer) {
+                        column_idx = @intCast(@max(0, lit.Integer));
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // Second argument is the offset (optional, default 1)
+        if (function.arguments.len > 1) {
+            switch (function.arguments[1]) {
+                .Literal => |lit| {
+                    if (lit == .Integer) {
+                        offset = @intCast(@max(0, lit.Integer));
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // Third argument is the default value (optional, default NULL)
+        if (function.arguments.len > 2) {
+            switch (function.arguments[2]) {
+                .Literal => |lit| {
+                    default_value = try self.convertAstValueToStorage(lit);
+                },
+                else => {},
+            }
+        }
+
         const lead_row_index = context.current_row + offset;
 
         if (lead_row_index >= context.partition_end) {
-            return storage.Value.Null; // No lead value available
+            return default_value;
         }
 
-        // For basic implementation, return the first column of the lead row
-        // TODO: Implement proper column selection based on function arguments
-        if (context.rows[lead_row_index].values.len > 0) {
-            return context.rows[lead_row_index].values[0];
+        const row = context.rows[lead_row_index];
+        if (column_idx < row.values.len) {
+            return try row.values[column_idx].clone(self.allocator);
         }
 
-        return storage.Value.Null;
+        return default_value;
     }
 
     /// Execute LAG() window function
+    /// LAG(column, offset, default) - returns value from a row offset rows before current row
     fn executeLag(self: *WindowExecutor, function: ast.WindowFunction, context: *WindowContext) !storage.Value {
-        _ = self;
-        _ = function;
+        // Parse arguments: LAG(column, [offset], [default])
+        var offset: usize = 1;
+        var default_value: storage.Value = storage.Value.Null;
+        var column_idx: usize = 0;
 
-        const offset = 1; // Default lag offset
+        // First argument is the column to fetch
+        if (function.arguments.len > 0) {
+            switch (function.arguments[0]) {
+                .Column => |col_name| {
+                    if (context.column_indices) |indices| {
+                        column_idx = indices.get(col_name) orelse 0;
+                    }
+                },
+                .Literal => |lit| {
+                    if (lit == .Integer) {
+                        column_idx = @intCast(@max(0, lit.Integer));
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // Second argument is the offset
+        if (function.arguments.len > 1) {
+            switch (function.arguments[1]) {
+                .Literal => |lit| {
+                    if (lit == .Integer) {
+                        offset = @intCast(@max(0, lit.Integer));
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // Third argument is the default value
+        if (function.arguments.len > 2) {
+            switch (function.arguments[2]) {
+                .Literal => |lit| {
+                    default_value = try self.convertAstValueToStorage(lit);
+                },
+                else => {},
+            }
+        }
 
         if (context.current_row < context.partition_start + offset) {
-            return storage.Value.Null; // No lag value available
+            return default_value;
         }
 
         const lag_row_index = context.current_row - offset;
+        const row = context.rows[lag_row_index];
 
-        // For basic implementation, return the first column of the lag row
-        // TODO: Implement proper column selection based on function arguments
-        if (context.rows[lag_row_index].values.len > 0) {
-            return context.rows[lag_row_index].values[0];
+        if (column_idx < row.values.len) {
+            return try row.values[column_idx].clone(self.allocator);
         }
 
-        return storage.Value.Null;
+        return default_value;
+    }
+
+    /// Convert AST value to storage value
+    fn convertAstValueToStorage(self: *WindowExecutor, value: ast.Value) !storage.Value {
+        return switch (value) {
+            .Integer => |i| storage.Value{ .Integer = i },
+            .Text => |t| storage.Value{ .Text = try self.allocator.dupe(u8, t) },
+            .Real => |r| storage.Value{ .Real = r },
+            .Null => storage.Value.Null,
+            else => storage.Value.Null,
+        };
     }
 
     /// Apply window functions to a result set
@@ -126,14 +426,73 @@ pub const WindowExecutor = struct {
     ) !void {
         if (window_functions.len == 0) return;
 
-        var context = WindowContext.init(self.allocator, rows.items);
+        // Process each window function
+        for (window_functions) |window_func| {
+            // Create context with ORDER BY from window specification
+            var context = try WindowContext.initWithOrderBy(
+                self.allocator,
+                rows.items,
+                window_func.window_spec.order_by,
+                null, // Column indices would come from table schema
+            );
+            defer context.deinit();
 
-        // Process each row
-        for (rows.items, 0..) |*row, i| {
-            context.current_row = i;
+            // Process each row
+            for (rows.items, 0..) |*row, i| {
+                context.current_row = i;
 
-            // Apply each window function
-            for (window_functions) |window_func| {
+                const result = try self.executeWindowFunction(window_func, &context);
+
+                // Add the window function result as a new column
+                var new_values = try self.allocator.alloc(storage.Value, row.values.len + 1);
+
+                // Copy existing values
+                for (row.values, 0..) |value, j| {
+                    new_values[j] = value;
+                }
+
+                // Add window function result
+                new_values[row.values.len] = result;
+
+                // Replace the row's values
+                self.allocator.free(row.values);
+                row.values = new_values;
+            }
+        }
+    }
+
+    /// Apply window functions with column mapping for proper column reference resolution
+    pub fn applyWindowFunctionsWithSchema(
+        self: *WindowExecutor,
+        rows: *std.ArrayList(storage.Row),
+        window_functions: []ast.WindowFunction,
+        column_names: []const []const u8,
+    ) !void {
+        if (window_functions.len == 0) return;
+
+        // Build column name to index map
+        var column_indices = std.StringHashMap(usize).init(self.allocator);
+        defer column_indices.deinit();
+
+        for (column_names, 0..) |name, idx| {
+            try column_indices.put(name, idx);
+        }
+
+        // Process each window function
+        for (window_functions) |window_func| {
+            // Create context with ORDER BY and column indices
+            var context = try WindowContext.initWithOrderBy(
+                self.allocator,
+                rows.items,
+                window_func.window_spec.order_by,
+                column_indices,
+            );
+            defer context.deinit();
+
+            // Process each row
+            for (rows.items, 0..) |*row, i| {
+                context.current_row = i;
+
                 const result = try self.executeWindowFunction(window_func, &context);
 
                 // Add the window function result as a new column
@@ -175,48 +534,165 @@ pub const WindowExecutor = struct {
     }
 
     /// Execute NTILE() window function
+    /// NTILE(n) - divides the partition into n buckets and returns bucket number
     fn executeNtile(self: *WindowExecutor, function: ast.WindowFunction, context: *WindowContext) !storage.Value {
         _ = self;
-        _ = function;
         const partition_size = context.partition_end - context.partition_start;
         const position = context.current_row - context.partition_start;
 
-        // Default to 4 buckets if no argument specified
-        const buckets = 4;
-        const bucket_size = partition_size / buckets;
-        const bucket = @min(position / bucket_size + 1, buckets);
+        // Get number of buckets from first argument (default to 4)
+        var buckets: usize = 4;
+        if (function.arguments.len > 0) {
+            switch (function.arguments[0]) {
+                .Literal => |lit| {
+                    if (lit == .Integer and lit.Integer > 0) {
+                        buckets = @intCast(lit.Integer);
+                    }
+                },
+                else => {},
+            }
+        }
+
+        if (buckets == 0) buckets = 1;
+
+        // Calculate bucket assignment
+        // NTILE distributes rows as evenly as possible
+        const rows_per_bucket = partition_size / buckets;
+        const extra_rows = partition_size % buckets;
+
+        // First 'extra_rows' buckets get one extra row
+        var bucket: usize = 1;
+        var rows_counted: usize = 0;
+
+        for (1..buckets + 1) |b| {
+            const bucket_rows = rows_per_bucket + (if (b <= extra_rows) @as(usize, 1) else @as(usize, 0));
+            if (position < rows_counted + bucket_rows) {
+                bucket = b;
+                break;
+            }
+            rows_counted += bucket_rows;
+        }
+
         return storage.Value{ .Integer = @intCast(bucket) };
     }
 
     /// Execute FIRST_VALUE() window function
+    /// FIRST_VALUE(column) - returns the first value of the specified column in the partition
     fn executeFirstValue(self: *WindowExecutor, function: ast.WindowFunction, context: *WindowContext) !storage.Value {
-        _ = self;
-        _ = function;
-        if (context.partition_start < context.rows.len) {
-            // Return the first value in the partition (stub - would need expression evaluation)
-            return storage.Value{ .Null = {} };
+        if (context.partition_start >= context.rows.len) {
+            return storage.Value.Null;
         }
-        return storage.Value{ .Null = {} };
+
+        // Get column index from first argument
+        var column_idx: usize = 0;
+        if (function.arguments.len > 0) {
+            switch (function.arguments[0]) {
+                .Column => |col_name| {
+                    if (context.column_indices) |indices| {
+                        column_idx = indices.get(col_name) orelse 0;
+                    }
+                },
+                .Literal => |lit| {
+                    if (lit == .Integer) {
+                        column_idx = @intCast(@max(0, lit.Integer));
+                    }
+                },
+                else => {},
+            }
+        }
+
+        const first_row = context.rows[context.partition_start];
+        if (column_idx < first_row.values.len) {
+            return try first_row.values[column_idx].clone(self.allocator);
+        }
+
+        return storage.Value.Null;
     }
 
     /// Execute LAST_VALUE() window function
+    /// LAST_VALUE(column) - returns the last value of the specified column in the partition
+    /// Note: In standard SQL, LAST_VALUE uses the current frame, not entire partition.
+    /// This implementation returns the value at the current row's position in the frame.
     fn executeLastValue(self: *WindowExecutor, function: ast.WindowFunction, context: *WindowContext) !storage.Value {
-        _ = self;
-        _ = function;
-        if (context.partition_end > 0) {
-            // Return the last value in the partition (stub - would need expression evaluation)
-            return storage.Value{ .Null = {} };
+        if (context.partition_end == 0 or context.partition_end > context.rows.len) {
+            return storage.Value.Null;
         }
-        return storage.Value{ .Null = {} };
+
+        // Get column index from first argument
+        var column_idx: usize = 0;
+        if (function.arguments.len > 0) {
+            switch (function.arguments[0]) {
+                .Column => |col_name| {
+                    if (context.column_indices) |indices| {
+                        column_idx = indices.get(col_name) orelse 0;
+                    }
+                },
+                .Literal => |lit| {
+                    if (lit == .Integer) {
+                        column_idx = @intCast(@max(0, lit.Integer));
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // Standard SQL LAST_VALUE with default frame (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+        // returns the current row value. For ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING,
+        // it returns the actual last row. We implement the latter for simplicity.
+        const last_row = context.rows[context.partition_end - 1];
+        if (column_idx < last_row.values.len) {
+            return try last_row.values[column_idx].clone(self.allocator);
+        }
+
+        return storage.Value.Null;
     }
 
     /// Execute NTH_VALUE() window function
+    /// NTH_VALUE(column, n) - returns the nth value of the column in the partition
     fn executeNthValue(self: *WindowExecutor, function: ast.WindowFunction, context: *WindowContext) !storage.Value {
-        _ = self;
-        _ = function;
-        _ = context;
-        // Stub implementation - would need to extract N from function arguments
-        return storage.Value{ .Null = {} };
+        // Get column index and N from arguments
+        var column_idx: usize = 0;
+        var n: usize = 1;
+
+        if (function.arguments.len > 0) {
+            switch (function.arguments[0]) {
+                .Column => |col_name| {
+                    if (context.column_indices) |indices| {
+                        column_idx = indices.get(col_name) orelse 0;
+                    }
+                },
+                .Literal => |lit| {
+                    if (lit == .Integer) {
+                        column_idx = @intCast(@max(0, lit.Integer));
+                    }
+                },
+                else => {},
+            }
+        }
+
+        if (function.arguments.len > 1) {
+            switch (function.arguments[1]) {
+                .Literal => |lit| {
+                    if (lit == .Integer and lit.Integer > 0) {
+                        n = @intCast(lit.Integer);
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // N is 1-based
+        const target_idx = context.partition_start + n - 1;
+        if (target_idx >= context.partition_end or target_idx >= context.rows.len) {
+            return storage.Value.Null;
+        }
+
+        const target_row = context.rows[target_idx];
+        if (column_idx < target_row.values.len) {
+            return try target_row.values[column_idx].clone(self.allocator);
+        }
+
+        return storage.Value.Null;
     }
 };
 

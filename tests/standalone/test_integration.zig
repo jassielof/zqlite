@@ -110,7 +110,7 @@ pub fn main() !void {
         std.debug.print("❌ Failed to execute prepared statement: {}\n", .{err});
         return;
     };
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     std.debug.print("✅ Successfully executed prepared statement with parameter substitution\n", .{});
     std.debug.print("   Affected rows: {}\n\n", .{result.affected_rows});

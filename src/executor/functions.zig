@@ -41,9 +41,115 @@ pub const FunctionEvaluator = struct {
             return self.evalDate(function_call.arguments);
         } else if (std.mem.eql(u8, lower_name, "time")) {
             return self.evalTime(function_call.arguments);
+        } else if (std.mem.eql(u8, lower_name, "coalesce")) {
+            return self.evalCoalesce(function_call.arguments);
+        } else if (std.mem.eql(u8, lower_name, "nullif")) {
+            return self.evalNullif(function_call.arguments);
+        } else if (std.mem.eql(u8, lower_name, "ifnull")) {
+            return self.evalIfnull(function_call.arguments);
         } else {
             return error.UnknownFunction;
         }
+    }
+
+    /// COALESCE(a, b, c, ...) - returns the first non-NULL value
+    fn evalCoalesce(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
+        if (arguments.len == 0) {
+            return error.InvalidArgumentCount;
+        }
+
+        for (arguments) |arg| {
+            const value = try self.resolveArgument(arg);
+            switch (value) {
+                .Null => {
+                    value.deinit(self.allocator);
+                    continue;
+                },
+                else => return value,
+            }
+        }
+
+        return storage.Value.Null;
+    }
+
+    /// NULLIF(a, b) - returns NULL if a = b, otherwise returns a
+    fn evalNullif(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
+        if (arguments.len != 2) {
+            return error.InvalidArgumentCount;
+        }
+
+        const a = try self.resolveArgument(arguments[0]);
+        const b = try self.resolveArgument(arguments[1]);
+        defer b.deinit(self.allocator);
+
+        // Compare values
+        const are_equal = self.valuesEqual(a, b);
+
+        if (are_equal) {
+            a.deinit(self.allocator);
+            return storage.Value.Null;
+        } else {
+            return a;
+        }
+    }
+
+    /// IFNULL(a, b) - returns b if a is NULL, otherwise returns a
+    fn evalIfnull(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {
+        if (arguments.len != 2) {
+            return error.InvalidArgumentCount;
+        }
+
+        const a = try self.resolveArgument(arguments[0]);
+
+        switch (a) {
+            .Null => {
+                return try self.resolveArgument(arguments[1]);
+            },
+            else => return a,
+        }
+    }
+
+    /// Compare two storage values for equality
+    fn valuesEqual(self: *Self, a: storage.Value, b: storage.Value) bool {
+        _ = self;
+        // If types don't match, they're not equal
+        if (@as(std.meta.Tag(storage.Value), a) != @as(std.meta.Tag(storage.Value), b)) {
+            return false;
+        }
+
+        return switch (a) {
+            .Integer => |i| i == b.Integer,
+            .Real => |r| r == b.Real,
+            .Text => |t| std.mem.eql(u8, t, b.Text),
+            .Blob => |bl| std.mem.eql(u8, bl, b.Blob),
+            .Null => true, // NULL = NULL is true for NULLIF
+            else => false,
+        };
+    }
+
+    /// Resolve a function argument to a storage value
+    fn resolveArgument(self: *Self, arg: ast.FunctionArgument) anyerror!storage.Value {
+        return switch (arg) {
+            .Literal => |value| {
+                return switch (value) {
+                    .Integer => |i| storage.Value{ .Integer = i },
+                    .Real => |r| storage.Value{ .Real = r },
+                    .Text => |t| storage.Value{ .Text = try self.allocator.dupe(u8, t) },
+                    .Blob => |b| storage.Value{ .Blob = try self.allocator.dupe(u8, b) },
+                    .Null => storage.Value.Null,
+                    .Parameter => storage.Value.Null, // Parameters should be resolved before this
+                    .FunctionCall => |func| try self.evaluateFunction(func),
+                    .Case => storage.Value.Null, // CASE inside function not yet supported
+                };
+            },
+            .String => |s| storage.Value{ .Text = try self.allocator.dupe(u8, s) },
+            .Column => |col| {
+                // Column reference inside function - not supported in this context
+                _ = col;
+                return storage.Value.Null;
+            },
+            else => storage.Value.Null,
+        };
     }
 
     fn evalNow(self: *Self, arguments: []ast.FunctionArgument) !storage.Value {

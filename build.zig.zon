@@ -1,12 +1,12 @@
 .{
     .name = .zqlite,
-    .version = "1.4.0",
+    .version = "1.5.0",
     .fingerprint = 0x9fb4d74ae26e27d0,
 
     .dependencies = .{
         .zsync = .{
             .url = "https://github.com/ghostkellz/zsync/archive/main.tar.gz",
-            .hash = "zsync-0.7.1-KAuhef8qIQApcisOPygXIeE9pC8qzdQL2Jp96JbNQyRm",
+            .hash = "zsync-0.7.4-KAuheWHdFgCcdMYVBTrJ-COoDjytZBJB8ikII1hJG7gj",
         },
     },
 

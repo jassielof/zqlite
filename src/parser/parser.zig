@@ -25,6 +25,27 @@ pub const Parser = struct {
 
     const Self = @This();
 
+    /// Error set for parsing operations
+    pub const Error = error{
+        UnexpectedToken,
+        ExpectedNumber,
+        ExpectedNull,
+        ExpectedOperator,
+        ExpectedValue,
+        ExpectedIdentifier,
+        AsteriskOnlyValidForCount,
+        ExpectedDeleteOrUpdate,
+        ExpectedAction,
+        ExpectedLeftParen,
+        ExpectedCommaOrRightParen,
+        OutOfMemory,
+        InvalidCharacter,
+        Overflow,
+        UnterminatedComment,
+        UnterminatedString,
+        UnexpectedCharacter,
+    };
+
     /// Initialize parser with SQL input
     pub fn init(allocator: std.mem.Allocator, sql: []const u8) !Self {
         var tkn = tokenizer.Tokenizer.init(sql);
@@ -39,7 +60,7 @@ pub const Parser = struct {
     }
 
     /// Parse SQL into AST
-    pub fn parse(self: *Self) !ast.Statement {
+    pub fn parse(self: *Self) anyerror!ast.Statement {
         return switch (self.current_token) {
             .Select => try self.parseSelect(),
             .Insert => try self.parseInsert(),
@@ -50,6 +71,8 @@ pub const Parser = struct {
             .Commit => try self.parseCommit(),
             .Rollback => try self.parseRollback(),
             .Drop => try self.parseDrop(),
+            .Pragma => try self.parsePragma(),
+            .Explain => try self.parseExplain(),
             else => error.UnexpectedToken,
         };
     }
@@ -436,6 +459,72 @@ pub const Parser = struct {
         return error.UnexpectedToken;
     }
 
+    /// Parse PRAGMA statement (e.g., PRAGMA table_info(tablename))
+    fn parsePragma(self: *Self) !ast.Statement {
+        try self.expect(.Pragma);
+
+        // Get pragma name (e.g., "table_info")
+        const pragma_name = try self.expectIdentifier();
+
+        // Check for argument in parentheses
+        var argument: ?[]const u8 = null;
+        if (std.meta.activeTag(self.current_token) == .LeftParen) {
+            try self.advance(); // consume '('
+
+            // Get the argument (table name, etc.)
+            argument = try self.expectIdentifier();
+
+            try self.expect(.RightParen);
+        }
+
+        return ast.Statement{
+            .Pragma = ast.PragmaStatement{
+                .name = pragma_name,
+                .argument = argument,
+            },
+        };
+    }
+
+    /// Parse EXPLAIN / EXPLAIN QUERY PLAN statement
+    fn parseExplain(self: *Self) anyerror!ast.Statement {
+        try self.expect(.Explain);
+
+        // Check for QUERY PLAN variant
+        var is_query_plan = false;
+        if (std.meta.activeTag(self.current_token) == .Identifier) {
+            if (self.current_token.Identifier.len == 5 and
+                std.ascii.eqlIgnoreCase(self.current_token.Identifier, "QUERY"))
+            {
+                try self.advance(); // consume 'QUERY'
+
+                // Expect PLAN
+                if (std.meta.activeTag(self.current_token) == .Identifier) {
+                    if (std.ascii.eqlIgnoreCase(self.current_token.Identifier, "PLAN")) {
+                        try self.advance(); // consume 'PLAN'
+                        is_query_plan = true;
+                    } else {
+                        return error.UnexpectedToken;
+                    }
+                } else {
+                    return error.UnexpectedToken;
+                }
+            }
+        }
+
+        // Parse the inner statement
+        const inner_statement = try self.allocator.create(ast.Statement);
+        errdefer self.allocator.destroy(inner_statement);
+        inner_statement.* = try self.parse();
+        errdefer inner_statement.deinit(self.allocator);
+
+        return ast.Statement{
+            .Explain = ast.ExplainStatement{
+                .is_query_plan = is_query_plan,
+                .inner_statement = inner_statement,
+            },
+        };
+    }
+
     /// Parse CREATE statement dispatcher
     fn parseCreate(self: *Self) !ast.Statement {
         try self.expect(.Create);
@@ -700,6 +789,57 @@ pub const Parser = struct {
                         .column = column_name,
                     },
                 },
+                .alias = alias,
+            };
+        }
+
+        // Check for CASE expression
+        if (std.meta.activeTag(self.current_token) == .Case) {
+            const case_value = try self.parseCaseExpression();
+            const case_expr = case_value.Case;
+
+            var alias: ?[]const u8 = null;
+            // Check for AS alias
+            if (std.meta.activeTag(self.current_token) == .As) {
+                try self.advance(); // consume AS
+                alias = try self.expectIdentifier();
+            } else if (std.meta.activeTag(self.current_token) == .Identifier) {
+                alias = try self.expectIdentifier();
+            }
+
+            return ast.Column{
+                .name = try self.allocator.dupe(u8, "CASE"),
+                .expression = ast.ColumnExpression{ .Case = case_expr },
+                .alias = alias,
+            };
+        }
+
+        // Check for null-handling functions: COALESCE, NULLIF, IFNULL
+        // and string functions: UPPER, LOWER, SUBSTR, LENGTH, TRIM
+        if (std.meta.activeTag(self.current_token) == .Coalesce or
+            std.meta.activeTag(self.current_token) == .Nullif or
+            std.meta.activeTag(self.current_token) == .Ifnull or
+            std.meta.activeTag(self.current_token) == .Upper or
+            std.meta.activeTag(self.current_token) == .Lower or
+            std.meta.activeTag(self.current_token) == .Substr or
+            std.meta.activeTag(self.current_token) == .Length or
+            std.meta.activeTag(self.current_token) == .Trim)
+        {
+            const func_value = try self.parseNullHandlingFunction();
+            const func_call = func_value.FunctionCall;
+
+            var alias: ?[]const u8 = null;
+            // Check for AS alias
+            if (std.meta.activeTag(self.current_token) == .As) {
+                try self.advance(); // consume AS
+                alias = try self.expectIdentifier();
+            } else if (std.meta.activeTag(self.current_token) == .Identifier) {
+                alias = try self.expectIdentifier();
+            }
+
+            return ast.Column{
+                .name = try self.allocator.dupe(u8, func_call.name),
+                .expression = ast.ColumnExpression{ .FunctionCall = func_call },
                 .alias = alias,
             };
         }
@@ -1057,6 +1197,24 @@ pub const Parser = struct {
                 try self.advance();
                 return ast.FunctionArgument{ .String = owned_string };
             },
+            .Identifier => |name| {
+                // Column reference in function argument
+                const col_name = try self.allocator.dupe(u8, name);
+                try self.advance();
+                return ast.FunctionArgument{ .Column = col_name };
+            },
+            .Integer => |i| {
+                try self.advance();
+                return ast.FunctionArgument{ .Literal = ast.Value{ .Integer = i } };
+            },
+            .Real => |r| {
+                try self.advance();
+                return ast.FunctionArgument{ .Literal = ast.Value{ .Real = r } };
+            },
+            .Null => {
+                try self.advance();
+                return ast.FunctionArgument{ .Literal = ast.Value.Null };
+            },
             else => {
                 const value = try self.parseValue();
                 return ast.FunctionArgument{ .Literal = value };
@@ -1071,7 +1229,7 @@ pub const Parser = struct {
     }
 
     /// Parse condition in WHERE clause
-    fn parseCondition(self: *Self) !ast.Condition {
+    fn parseCondition(self: *Self) Error!ast.Condition {
         var left = ast.Condition{ .Comparison = try self.parseComparison() };
 
         while (std.meta.activeTag(self.current_token) == .And or std.meta.activeTag(self.current_token) == .Or) {
@@ -1100,6 +1258,78 @@ pub const Parser = struct {
     /// Parse comparison condition
     fn parseComparison(self: *Self) !ast.ComparisonCondition {
         const left = try self.parseExpression();
+
+        // Check for IS [NOT] NULL
+        if (std.meta.activeTag(self.current_token) == .Is) {
+            try self.advance();
+            const is_not = std.meta.activeTag(self.current_token) == .Not;
+            if (is_not) try self.advance();
+
+            if (std.meta.activeTag(self.current_token) != .Null) {
+                return error.ExpectedNull;
+            }
+            try self.advance();
+
+            return ast.ComparisonCondition{
+                .left = left,
+                .operator = if (is_not) .IsNotNull else .IsNull,
+                .right = ast.Expression{ .Literal = ast.Value.Null },
+            };
+        }
+
+        // Check for NOT LIKE, NOT IN, NOT BETWEEN
+        if (std.meta.activeTag(self.current_token) == .Not) {
+            try self.advance();
+            return switch (self.current_token) {
+                .Like => blk: {
+                    try self.advance();
+                    const right = try self.parseExpression();
+                    break :blk ast.ComparisonCondition{
+                        .left = left,
+                        .operator = .NotLike,
+                        .right = right,
+                    };
+                },
+                .In => blk: {
+                    try self.advance();
+                    const right = try self.parseExpression();
+                    break :blk ast.ComparisonCondition{
+                        .left = left,
+                        .operator = .NotIn,
+                        .right = right,
+                    };
+                },
+                .Between => blk: {
+                    try self.advance();
+                    const low = try self.parseExpression();
+                    try self.expect(.And);
+                    const high = try self.parseExpression();
+                    break :blk ast.ComparisonCondition{
+                        .left = left,
+                        .operator = .NotBetween,
+                        .right = low,
+                        .extra = high,
+                    };
+                },
+                else => return error.ExpectedOperator,
+            };
+        }
+
+        // Check for BETWEEN
+        if (std.meta.activeTag(self.current_token) == .Between) {
+            try self.advance();
+            const low = try self.parseExpression();
+            try self.expect(.And);
+            const high = try self.parseExpression();
+            return ast.ComparisonCondition{
+                .left = left,
+                .operator = .Between,
+                .right = low,
+                .extra = high,
+            };
+        }
+
+        // Regular comparison operator
         const op = try self.parseComparisonOperator();
         const right = try self.parseExpression();
 
@@ -1149,7 +1379,26 @@ pub const Parser = struct {
     }
 
     /// Parse value literal
-    fn parseValue(self: *Self) !ast.Value {
+    fn parseValue(self: *Self) Error!ast.Value {
+        // Handle CASE expression
+        if (std.meta.activeTag(self.current_token) == .Case) {
+            return try self.parseCaseExpression();
+        }
+
+        // Handle null-handling functions: COALESCE, NULLIF, IFNULL
+        // and string functions: UPPER, LOWER, SUBSTR, LENGTH, TRIM
+        if (std.meta.activeTag(self.current_token) == .Coalesce or
+            std.meta.activeTag(self.current_token) == .Nullif or
+            std.meta.activeTag(self.current_token) == .Ifnull or
+            std.meta.activeTag(self.current_token) == .Upper or
+            std.meta.activeTag(self.current_token) == .Lower or
+            std.meta.activeTag(self.current_token) == .Substr or
+            std.meta.activeTag(self.current_token) == .Length or
+            std.meta.activeTag(self.current_token) == .Trim)
+        {
+            return try self.parseNullHandlingFunction();
+        }
+
         const value = switch (self.current_token) {
             .Integer => |i| ast.Value{ .Integer = i },
             .Real => |r| ast.Value{ .Real = r },
@@ -1195,6 +1444,101 @@ pub const Parser = struct {
         };
         try self.advance();
         return value;
+    }
+
+    /// Parse CASE WHEN ... THEN ... ELSE ... END expression
+    fn parseCaseExpression(self: *Self) Error!ast.Value {
+        try self.advance(); // consume CASE
+
+        var branches: std.ArrayListUnmanaged(ast.CaseWhenBranch) = .{};
+        errdefer {
+            for (branches.items) |*branch| {
+                branch.deinit(self.allocator);
+            }
+            branches.deinit(self.allocator);
+        }
+
+        // Parse WHEN branches
+        while (std.meta.activeTag(self.current_token) == .When) {
+            try self.advance(); // consume WHEN
+
+            // Parse condition
+            const condition = try self.allocator.create(ast.Condition);
+            condition.* = try self.parseCondition();
+
+            try self.expect(.Then);
+            const result = try self.parseValue();
+
+            try branches.append(self.allocator, ast.CaseWhenBranch{
+                .condition = condition,
+                .result = result,
+            });
+        }
+
+        // Parse optional ELSE
+        var else_result: ?*ast.Value = null;
+        if (std.meta.activeTag(self.current_token) == .Else) {
+            try self.advance(); // consume ELSE
+            else_result = try self.allocator.create(ast.Value);
+            else_result.?.* = try self.parseValue();
+        }
+
+        try self.expect(.End);
+
+        return ast.Value{
+            .Case = ast.CaseExpression{
+                .operand = null, // Simple searched CASE (CASE WHEN cond THEN ...)
+                .branches = try branches.toOwnedSlice(self.allocator),
+                .else_result = else_result,
+            },
+        };
+    }
+
+    /// Parse null-handling and string functions
+    fn parseNullHandlingFunction(self: *Self) Error!ast.Value {
+        const func_name: []const u8 = switch (std.meta.activeTag(self.current_token)) {
+            .Coalesce => "COALESCE",
+            .Nullif => "NULLIF",
+            .Ifnull => "IFNULL",
+            .Upper => "UPPER",
+            .Lower => "LOWER",
+            .Substr => "SUBSTR",
+            .Length => "LENGTH",
+            .Trim => "TRIM",
+            else => unreachable,
+        };
+
+        try self.advance(); // consume function name
+        try self.expect(.LeftParen);
+
+        var arguments: std.ArrayListUnmanaged(ast.FunctionArgument) = .{};
+        errdefer {
+            for (arguments.items) |*arg| {
+                arg.deinit(self.allocator);
+            }
+            arguments.deinit(self.allocator);
+        }
+
+        // Parse arguments
+        while (std.meta.activeTag(self.current_token) != .RightParen) {
+            const arg = try self.parseFunctionArgument();
+            try arguments.append(self.allocator, arg);
+
+            if (std.meta.activeTag(self.current_token) == .Comma) {
+                try self.advance();
+            } else if (std.meta.activeTag(self.current_token) != .RightParen) {
+                return error.ExpectedCommaOrRightParen;
+            }
+        }
+
+        try self.expect(.RightParen);
+
+        return ast.Value{
+            .FunctionCall = ast.FunctionCall{
+                .name = try self.allocator.dupe(u8, func_name),
+                .arguments = try arguments.toOwnedSlice(self.allocator),
+            },
+        };
     }
 
     /// Create detailed error message

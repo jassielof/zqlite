@@ -2,7 +2,6 @@ const std = @import("std");
 const zqlite = @import("../zqlite.zig");
 const version = @import("../version.zig");
 const storage = @import("../db/storage.zig");
-const posix = std.posix;
 
 /// Interactive CLI shell for zqlite
 pub const Shell = struct {
@@ -93,7 +92,7 @@ pub const Shell = struct {
             }
 
             // Check if statement is complete (ends with semicolon)
-            const trimmed = std.mem.trimRight(u8, statement_buffer[0..statement_len], " \t");
+            const trimmed = std.mem.trimEnd(u8, statement_buffer[0..statement_len], " \t");
             if (trimmed.len > 0 and trimmed[trimmed.len - 1] == ';') {
                 // Statement complete - execute it
                 self.processCommand(statement_buffer[0..statement_len]) catch |err| {
@@ -277,7 +276,7 @@ pub const Shell = struct {
             break :blk buf[0..len];
         };
 
-        const trimmed_upper = std.mem.trimLeft(u8, upper_sql, " \t");
+        const trimmed_upper = std.mem.trimStart(u8, upper_sql, " \t");
 
         if (std.mem.startsWith(u8, trimmed_upper, "SELECT") or
             std.mem.startsWith(u8, trimmed_upper, "PRAGMA"))
@@ -392,18 +391,10 @@ pub const Shell = struct {
     }
 };
 
-// Low-level I/O helper functions using posix
+// Low-level I/O helper functions
 
 fn writeAll(str: []const u8) !void {
-    const stdout_fd: posix.fd_t = posix.STDOUT_FILENO;
-    var total_written: usize = 0;
-    while (total_written < str.len) {
-        const written = posix.write(stdout_fd, str[total_written..]) catch |err| switch (err) {
-            error.BrokenPipe => return,
-            else => return err,
-        };
-        total_written += written;
-    }
+    std.debug.print("{s}", .{str});
 }
 
 fn writeInt(value: anytype) !void {
@@ -440,8 +431,8 @@ fn printValue(value: storage.Value) !void {
         .UUID => |u| {
             var buf: [36]u8 = undefined;
             _ = std.fmt.bufPrint(&buf, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{
-                u[0],  u[1],  u[2],  u[3],  u[4],  u[5],  u[6],  u[7],
-                u[8],  u[9],  u[10], u[11], u[12], u[13], u[14], u[15],
+                u[0], u[1], u[2],  u[3],  u[4],  u[5],  u[6],  u[7],
+                u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
             }) catch {};
             try writeAll(&buf);
         },
@@ -453,12 +444,12 @@ fn printValue(value: storage.Value) !void {
 }
 
 fn readLine(buffer: []u8) ![]const u8 {
-    const stdin_fd: posix.fd_t = posix.STDIN_FILENO;
+    const stdin_fd: std.posix.fd_t = std.posix.STDIN_FILENO;
     var pos: usize = 0;
 
     while (pos < buffer.len) {
         var byte: [1]u8 = undefined;
-        const n = posix.read(stdin_fd, &byte) catch |err| switch (err) {
+        const n = std.posix.read(stdin_fd, &byte) catch |err| switch (err) {
             error.WouldBlock => continue,
             else => return err,
         };

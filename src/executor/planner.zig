@@ -16,7 +16,7 @@ pub const Planner = struct {
     }
 
     /// Create execution plan for a statement
-    pub fn plan(self: *Self, statement: *const ast.Statement) !ExecutionPlan {
+    pub fn plan(self: *Self, statement: *const ast.Statement) anyerror!ExecutionPlan {
         return switch (statement.*) {
             .Select => |*select| try self.planSelect(select),
             .Insert => |*insert| try self.planInsert(insert),
@@ -30,6 +30,8 @@ pub const Planner = struct {
             .DropIndex => |*drop_idx| try self.planDropIndex(drop_idx),
             .DropTable => |*drop_tbl| try self.planDropTable(drop_tbl),
             .With => |*with| try self.planWith(with), // Handle CTE
+            .Pragma => |*pragma| try self.planPragma(pragma),
+            .Explain => |*explain| try self.planExplain(explain),
         };
     }
 
@@ -105,9 +107,15 @@ pub const Planner = struct {
         } else {
             // Regular projection step (SELECT columns)
             var columns: std.ArrayList([]const u8) = .{};
+            var expressions: std.ArrayList(ast.ColumnExpression) = .{};
+            var has_expressions = false;
+
             for (select.columns) |column| {
                 switch (column.expression) {
-                    .Simple => |name| try columns.append(self.allocator, try self.allocator.dupe(u8, name)),
+                    .Simple => |name| {
+                        try columns.append(self.allocator, try self.allocator.dupe(u8, name));
+                        try expressions.append(self.allocator, ast.ColumnExpression{ .Simple = try self.allocator.dupe(u8, name) });
+                    },
                     .Aggregate => {
                         // This shouldn't happen if has_aggregates was false
                         return error.UnexpectedAggregate;
@@ -115,10 +123,21 @@ pub const Planner = struct {
                     .Window => {
                         // Window functions will be handled in a later version
                         try columns.append(self.allocator, try self.allocator.dupe(u8, "window_result"));
+                        try expressions.append(self.allocator, ast.ColumnExpression{ .Simple = try self.allocator.dupe(u8, "window_result") });
                     },
-                    .FunctionCall => {
-                        // Function calls will be handled in a later version
-                        try columns.append(self.allocator, try self.allocator.dupe(u8, "function_result"));
+                    .FunctionCall => |func_call| {
+                        // Function calls in SELECT columns
+                        const col_name = if (column.alias) |a| a else func_call.name;
+                        try columns.append(self.allocator, try self.allocator.dupe(u8, col_name));
+                        try expressions.append(self.allocator, ast.ColumnExpression{ .FunctionCall = try self.cloneFunctionCall(func_call) });
+                        has_expressions = true;
+                    },
+                    .Case => |case_expr| {
+                        // Use alias or generate a name for CASE column
+                        const col_name = if (column.alias) |a| a else "CASE";
+                        try columns.append(self.allocator, try self.allocator.dupe(u8, col_name));
+                        try expressions.append(self.allocator, ast.ColumnExpression{ .Case = try self.cloneCaseExpression(case_expr) });
+                        has_expressions = true;
                     },
                 }
             }
@@ -126,8 +145,17 @@ pub const Planner = struct {
             try steps.append(self.allocator, ExecutionStep{
                 .Project = ProjectStep{
                     .columns = try columns.toOwnedSlice(self.allocator),
+                    .expressions = if (has_expressions) try expressions.toOwnedSlice(self.allocator) else null,
                 },
             });
+
+            // Clean up expressions if not used
+            if (!has_expressions) {
+                for (expressions.items) |*expr| {
+                    expr.deinit(self.allocator);
+                }
+                expressions.deinit(self.allocator);
+            }
         }
 
         // Limit step
@@ -494,6 +522,7 @@ pub const Planner = struct {
                     .left = try self.cloneExpression(&comp.left),
                     .operator = comp.operator,
                     .right = try self.cloneExpression(&comp.right),
+                    .extra = if (comp.extra) |extra| try self.cloneExpression(&extra) else null,
                 },
             },
             .Logical => |*logical| {
@@ -537,6 +566,11 @@ pub const Planner = struct {
                 // This will be evaluated at runtime by the VM
                 const storage_func = try self.convertAstFunctionToStorage(function_call);
                 return storage.Value{ .FunctionCall = storage_func };
+            },
+            .Case => {
+                // CASE expressions in INSERT VALUES are not yet supported
+                // They are typically used in SELECT expressions which are handled by the VM
+                return error.CaseNotSupportedInInsert;
             },
         };
         return ast_storage_value.clone(self.allocator);
@@ -632,22 +666,135 @@ pub const Planner = struct {
             .Null => ast.Value.Null,
             .Parameter => |param_index| ast.Value{ .Parameter = param_index },
             .FunctionCall => |function_call| ast.Value{ .FunctionCall = try self.cloneFunctionCall(function_call) },
+            .Case => |case_expr| ast.Value{ .Case = try self.cloneCaseExpression(case_expr) },
+        };
+    }
+
+    /// Clone a CASE expression
+    fn cloneCaseExpression(self: *Self, case_expr: ast.CaseExpression) anyerror!ast.CaseExpression {
+        var cloned_branches = try self.allocator.alloc(ast.CaseWhenBranch, case_expr.branches.len);
+        for (case_expr.branches, 0..) |branch, i| {
+            const cloned_condition = try self.allocator.create(ast.Condition);
+            cloned_condition.* = try self.cloneCondition(branch.condition);
+            cloned_branches[i] = ast.CaseWhenBranch{
+                .condition = cloned_condition,
+                .result = try self.cloneAstValue(branch.result),
+            };
+        }
+
+        var cloned_else: ?*ast.Value = null;
+        if (case_expr.else_result) |else_val| {
+            cloned_else = try self.allocator.create(ast.Value);
+            cloned_else.?.* = try self.cloneAstValue(else_val.*);
+        }
+
+        var cloned_operand: ?*ast.Value = null;
+        if (case_expr.operand) |op| {
+            cloned_operand = try self.allocator.create(ast.Value);
+            cloned_operand.?.* = try self.cloneAstValue(op.*);
+        }
+
+        return ast.CaseExpression{
+            .operand = cloned_operand,
+            .branches = cloned_branches,
+            .else_result = cloned_else,
+        };
+    }
+
+    /// Plan PRAGMA statement execution
+    fn planPragma(self: *Self, pragma: *const ast.PragmaStatement) !ExecutionPlan {
+        var steps: std.ArrayList(ExecutionStep) = .{};
+
+        try steps.append(self.allocator, ExecutionStep{
+            .Pragma = PragmaStep{
+                .name = try self.allocator.dupe(u8, pragma.name),
+                .argument = if (pragma.argument) |arg| try self.allocator.dupe(u8, arg) else null,
+            },
+        });
+
+        return ExecutionPlan{
+            .steps = try steps.toOwnedSlice(self.allocator),
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Plan EXPLAIN / EXPLAIN QUERY PLAN statement
+    fn planExplain(self: *Self, explain: *const ast.ExplainStatement) anyerror!ExecutionPlan {
+        var steps: std.ArrayList(ExecutionStep) = .{};
+
+        // First, plan the inner statement to get its execution steps
+        const inner_plan = try self.plan(explain.inner_statement);
+        defer {
+            // Free the inner plan's step array since we're copying the steps
+            self.allocator.free(inner_plan.steps);
+        }
+
+        // Copy inner steps for the explain step
+        var inner_steps = try self.allocator.alloc(ExecutionStep, inner_plan.steps.len);
+        for (inner_plan.steps, 0..) |step, i| {
+            inner_steps[i] = step;
+        }
+
+        try steps.append(self.allocator, ExecutionStep{
+            .Explain = ExplainStep{
+                .is_query_plan = explain.is_query_plan,
+                .inner_steps = inner_steps,
+            },
+        });
+
+        return ExecutionPlan{
+            .steps = try steps.toOwnedSlice(self.allocator),
+            .allocator = self.allocator,
         };
     }
 
     /// Plan Common Table Expression (WITH clause) execution
+    /// CTEs are executed first, their results stored, then the main query references them
     fn planWith(self: *Self, with: *const ast.WithStatement) !ExecutionPlan {
         var steps: std.ArrayList(ExecutionStep) = .{};
 
-        // For now, just plan the main query (CTE support will be enhanced later)
-        _ = with.cte_definitions; // TODO: Implement full CTE planning
+        // First, plan and create execution steps for each CTE definition
+        // CTEs are executed in order and can reference previously defined CTEs
+        for (with.cte_definitions) |cte_def| {
+            // Plan the CTE's subquery
+            const cte_plan = try self.planSelect(&cte_def.query);
+            defer {
+                // Free the plan's step array but not the steps themselves
+                // since we're moving them into the CTE step
+                self.allocator.free(cte_plan.steps);
+            }
 
+            // Clone column names if provided
+            var column_names: ?[][]const u8 = null;
+            if (cte_def.column_names) |cols| {
+                var cloned_cols: std.ArrayList([]const u8) = .{};
+                for (cols) |col| {
+                    try cloned_cols.append(self.allocator, try self.allocator.dupe(u8, col));
+                }
+                column_names = try cloned_cols.toOwnedSlice(self.allocator);
+            }
+
+            // Create the CTE step
+            try steps.append(self.allocator, ExecutionStep{
+                .CreateCTE = CreateCTEStep{
+                    .name = try self.allocator.dupe(u8, cte_def.name),
+                    .subquery_steps = try self.allocator.dupe(ExecutionStep, cte_plan.steps),
+                    .column_names = column_names,
+                    .recursive = with.recursive,
+                },
+            });
+        }
+
+        // Now plan the main query - it can reference the CTEs by name
         const main_plan = try self.planSelect(&with.main_query);
 
         // Append main query steps
         for (main_plan.steps) |step| {
             try steps.append(self.allocator, step);
         }
+
+        // Don't free main_plan.steps since we've moved them
+        self.allocator.free(main_plan.steps);
 
         return ExecutionPlan{
             .steps = try steps.toOwnedSlice(self.allocator),
@@ -689,7 +836,9 @@ pub const ExecutionStep = union(enum) {
     CreateIndex: CreateIndexStep,
     DropIndex: DropIndexStep,
     DropTable: DropTableStep,
-    // CreateCTE: CreateCTEStep, // TODO: Add CTE support in future version
+    CreateCTE: CreateCTEStep, // Common Table Expression support
+    Pragma: PragmaStep, // PRAGMA statements for introspection
+    Explain: ExplainStep, // EXPLAIN / EXPLAIN QUERY PLAN
 
     pub fn deinit(self: *ExecutionStep, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -711,7 +860,9 @@ pub const ExecutionStep = union(enum) {
             .CreateIndex => |*step| step.deinit(allocator),
             .DropIndex => |*step| step.deinit(allocator),
             .DropTable => |*step| step.deinit(allocator),
-            // .CreateCTE => |*step| step.deinit(allocator), // TODO: Add CTE support
+            .CreateCTE => |*step| step.deinit(allocator),
+            .Pragma => |*step| step.deinit(allocator),
+            .Explain => |*step| step.deinit(allocator),
         }
     }
 };
@@ -737,12 +888,20 @@ pub const FilterStep = struct {
 /// Projection step (SELECT columns)
 pub const ProjectStep = struct {
     columns: [][]const u8,
+    expressions: ?[]ast.ColumnExpression, // Optional column expressions (for CASE, etc.)
 
     pub fn deinit(self: *ProjectStep, allocator: std.mem.Allocator) void {
         for (self.columns) |column| {
             allocator.free(column);
         }
         allocator.free(self.columns);
+
+        if (self.expressions) |exprs| {
+            for (exprs) |*expr| {
+                @constCast(expr).deinit(allocator);
+            }
+            allocator.free(exprs);
+        }
     }
 };
 
@@ -956,15 +1115,63 @@ pub const AggregateOperation = struct {
     }
 };
 
-/// CTE creation step
+/// CTE creation step - defines a temporary named result set
 pub const CreateCTEStep = struct {
+    /// Name of the CTE (used to reference it in the main query)
     name: []const u8,
-    plan: ExecutionPlan,
+    /// Execution steps for the CTE's subquery
+    subquery_steps: []ExecutionStep,
+    /// Optional column names for the CTE result
+    column_names: ?[][]const u8,
+    /// Whether this is part of a recursive CTE
     recursive: bool,
 
     pub fn deinit(self: *CreateCTEStep, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
-        self.plan.deinit();
+
+        // Free subquery steps
+        for (self.subquery_steps) |*step| {
+            step.deinit(allocator);
+        }
+        allocator.free(self.subquery_steps);
+
+        // Free column names if present
+        if (self.column_names) |cols| {
+            for (cols) |col| {
+                allocator.free(col);
+            }
+            allocator.free(cols);
+        }
+    }
+};
+
+/// PRAGMA step - executes PRAGMA commands for database introspection
+pub const PragmaStep = struct {
+    /// PRAGMA name (e.g., "table_info", "database_list")
+    name: []const u8,
+    /// Optional argument (e.g., table name for table_info)
+    argument: ?[]const u8,
+
+    pub fn deinit(self: *PragmaStep, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        if (self.argument) |arg| {
+            allocator.free(arg);
+        }
+    }
+};
+
+/// EXPLAIN step - returns query plan without executing
+pub const ExplainStep = struct {
+    /// true for EXPLAIN QUERY PLAN, false for just EXPLAIN
+    is_query_plan: bool,
+    /// The execution steps that would be executed
+    inner_steps: []ExecutionStep,
+
+    pub fn deinit(self: *ExplainStep, allocator: std.mem.Allocator) void {
+        for (self.inner_steps) |*step| {
+            step.deinit(allocator);
+        }
+        allocator.free(self.inner_steps);
     }
 };
 

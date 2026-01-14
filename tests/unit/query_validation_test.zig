@@ -50,7 +50,7 @@ test "Query Validation - Complex SELECT Statements" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 3);
 
@@ -96,7 +96,7 @@ test "Query Validation - Subqueries and Window Functions" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     // Should return laptops and potentially some phones
     try testing.expect(result.rows.items.len >= 2);
@@ -131,7 +131,7 @@ test "Query Validation - Date and Time Functions" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 2);
 
@@ -177,7 +177,7 @@ test "Query Validation - Transaction Integrity" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 2);
 
@@ -219,7 +219,7 @@ test "Query Validation - Error Handling and Edge Cases" {
     defer stmt.deinit();
 
     var query_result = try stmt.execute();
-    defer query_result.deinit(allocator);
+    defer query_result.deinit();
 
     switch (query_result.rows.items[0].values[0]) {
         .Integer => |count| try testing.expect(count == 1),
@@ -262,7 +262,7 @@ test "Query Validation - Index Performance" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     switch (result.rows.items[0].values[0]) {
         .Integer => |count| try testing.expect(count == 49), // IDs 1-49
@@ -298,7 +298,7 @@ test "Query Validation - NULL Handling" {
     defer stmt1.deinit();
 
     var result1 = try stmt1.execute();
-    defer result1.deinit(allocator);
+    defer result1.deinit();
 
     switch (result1.rows.items[0].values[0]) {
         .Integer => |count| try testing.expect(count == 1),
@@ -309,7 +309,7 @@ test "Query Validation - NULL Handling" {
     defer stmt2.deinit();
 
     var result2 = try stmt2.execute();
-    defer result2.deinit(allocator);
+    defer result2.deinit();
 
     switch (result2.rows.items[0].values[0]) {
         .Integer => |count| try testing.expect(count == 1),

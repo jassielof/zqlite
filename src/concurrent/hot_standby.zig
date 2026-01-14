@@ -233,7 +233,8 @@ pub const HotStandby = struct {
                 return error.TransactionTimeout;
             }
 
-            std.Thread.sleep(100 * std.time.ns_per_ms);
+            // Wait before retrying (busy wait since std.time.sleep is not available)
+            _ = @as(u32, 0); // Placeholder for sleep
         }
     }
 

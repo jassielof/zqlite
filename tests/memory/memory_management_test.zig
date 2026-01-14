@@ -29,7 +29,7 @@ test "Memory Management - No Leaks with DEFAULT CURRENT_TIMESTAMP" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 10);
 }
@@ -74,7 +74,7 @@ test "Memory Management - Complex INSERT/UPDATE/DELETE Cycle" {
         defer stmt.deinit();
 
         var result = try stmt.execute();
-        defer result.deinit(allocator);
+        defer result.deinit();
 
         // Delete batch
         try conn.execute("DELETE FROM memory_test WHERE id % 3 = 0");
@@ -114,7 +114,7 @@ test "Memory Management - Function Call DEFAULT Values" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     try testing.expect(result.rows.items.len == 1);
     switch (result.rows.items[0].values[0]) {
@@ -155,7 +155,7 @@ test "Memory Management - Large Text Fields" {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     switch (result.rows.items[0].values[0]) {
         .Integer => |count| try testing.expect(count == 10),
@@ -189,7 +189,7 @@ test "Memory Management - Connection Lifecycle" {
         defer stmt.deinit();
 
         var result = try stmt.execute();
-        defer result.deinit(allocator);
+        defer result.deinit();
 
         try testing.expect(result.rows.items.len == 1);
     }
@@ -220,7 +220,7 @@ test "Memory Management - Prepared Statement Reuse" {
         try conn.execute("INSERT INTO reuse_test (name) VALUES ('test')");
 
         var result = try stmt.execute();
-        defer result.deinit(allocator);
+        defer result.deinit();
 
         switch (result.rows.items[0].values[0]) {
             .Integer => |count| try testing.expect(count == @as(i64, @intCast(i + 1))),

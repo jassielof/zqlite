@@ -105,7 +105,7 @@ fn testBasicCrud(allocator: std.mem.Allocator) !void {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     switch (result.rows.items[0].values[0]) {
         .Integer => |count| {
@@ -121,7 +121,7 @@ fn testBasicCrud(allocator: std.mem.Allocator) !void {
     defer stmt2.deinit();
 
     var result2 = try stmt2.execute();
-    defer result2.deinit(allocator);
+    defer result2.deinit();
 
     switch (result2.rows.items[0].values[0]) {
         .Integer => |count| {

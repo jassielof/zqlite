@@ -66,7 +66,7 @@ pub fn main() !void {
         const start_time = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
 
         // Hash the query for caching
-        const query_hash = cache.hashQuery(query);
+        const query_hash = zqlite.QueryHasher.hashQuery(query);
 
         // Check if query is in cache
         const cached_result = cache.get(query_hash);
@@ -75,29 +75,29 @@ pub fn main() !void {
             std.debug.print("   ❌ Cache MISS - Executing query\n", .{});
 
             // Execute the query (simulated - would integrate with real executor)
-            std.Thread.sleep(10 * std.time.ns_per_ms); // Simulate query execution time
+            // In a real implementation, this would execute the actual query
 
-            // Create mock result for caching
-            const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-            const end_time = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
-            var mock_result = zqlite.query_cache.CachedResult{
-                .rows = try allocator.alloc(zqlite.storage.Row, 2),
-                .columns = try allocator.alloc([]const u8, 2),
-                .execution_time_ns = end_time - start_time,
-            };
+            // Create mock rows for caching
+            const mock_rows = try allocator.alloc(zqlite.storage.Row, 2);
+            defer allocator.free(mock_rows);
 
             // Set up mock data
-            mock_result.columns[0] = try allocator.dupe(u8, "name");
-            mock_result.columns[1] = try allocator.dupe(u8, "price");
-
-            for (mock_result.rows, 0..) |*row, j| {
+            for (mock_rows, 0..) |*row, j| {
                 row.values = try allocator.alloc(zqlite.storage.Value, 2);
                 row.values[0] = zqlite.storage.Value{ .Text = try std.fmt.allocPrint(allocator, "Product {}", .{j + 1}) };
                 row.values[1] = zqlite.storage.Value{ .Real = @as(f64, @floatFromInt(100 + j * 50)) };
             }
 
             // Cache the result
-            try cache.put(query_hash, query, mock_result);
+            try cache.put(query_hash, query, mock_rows);
+
+            // Clean up mock data (cache clones it)
+            for (mock_rows) |*row| {
+                for (row.values) |value| {
+                    value.deinit(allocator);
+                }
+                allocator.free(row.values);
+            }
 
             const ts_final = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
             const final_time = @as(i128, ts_final.sec) * std.time.ns_per_s + ts_final.nsec;
@@ -109,12 +109,12 @@ pub fn main() !void {
             const cache_end_time = @as(i128, ts_cache.sec) * std.time.ns_per_s + ts_cache.nsec;
             const cache_time = cache_end_time - start_time;
             std.debug.print("   ⚡ Cache retrieval time: {d:.2}ms\n", .{@as(f64, @floatFromInt(cache_time)) / std.time.ns_per_ms});
-            std.debug.print("   📊 Original execution time: {d:.2}ms\n", .{@as(f64, @floatFromInt(cached_result.?.execution_time_ns)) / std.time.ns_per_ms});
+            std.debug.print("   📊 Cached row count: {}\n", .{cached_result.?.row_count});
         }
 
         // Show cache statistics
         const stats = cache.getStats();
-        std.debug.print("   📈 Cache stats: {} entries, {} hits, {} misses\n\n", .{ stats.total_entries, stats.cache_hits, stats.cache_misses });
+        std.debug.print("   📈 Cache stats: {} entries, {} hits, {} misses\n\n", .{ stats.entries, stats.hit_count, stats.miss_count });
 
         // Second execution of same query - should be cache hit
         if (i == 0) {
@@ -125,7 +125,7 @@ pub fn main() !void {
             }
 
             const stats_2 = cache.getStats();
-            std.debug.print("   📈 Updated stats: {} entries, {} hits, {} misses\n\n", .{ stats_2.total_entries, stats_2.cache_hits, stats_2.cache_misses });
+            std.debug.print("   📈 Updated stats: {} entries, {} hits, {} misses\n\n", .{ stats_2.entries, stats_2.hit_count, stats_2.miss_count });
         }
     }
 
@@ -137,40 +137,30 @@ pub fn main() !void {
         const unique_query = try std.fmt.allocPrint(allocator, "SELECT * FROM products WHERE id = {}", .{i});
         defer allocator.free(unique_query);
 
-        const hash = cache.hashQuery(unique_query);
+        const hash = zqlite.QueryHasher.hashQuery(unique_query);
 
         // Create small mock result
-        var eviction_result = zqlite.query_cache.CachedResult{
-            .rows = try allocator.alloc(zqlite.storage.Row, 1),
-            .columns = try allocator.alloc([]const u8, 1),
-            .execution_time_ns = 1000000, // 1ms
-        };
+        const eviction_rows = try allocator.alloc(zqlite.storage.Row, 1);
+        defer allocator.free(eviction_rows);
 
-        eviction_result.columns[0] = try allocator.dupe(u8, "id");
-        eviction_result.rows[0].values = try allocator.alloc(zqlite.storage.Value, 1);
-        eviction_result.rows[0].values[0] = zqlite.storage.Value{ .Integer = @intCast(i) };
+        eviction_rows[0].values = try allocator.alloc(zqlite.storage.Value, 1);
+        eviction_rows[0].values[0] = zqlite.storage.Value{ .Integer = @intCast(i) };
 
-        try cache.put(hash, unique_query, eviction_result);
+        try cache.put(hash, unique_query, eviction_rows);
+
+        // Clean up mock data
+        for (eviction_rows) |*row| {
+            allocator.free(row.values);
+        }
     }
 
     const final_stats = cache.getStats();
-    std.debug.print("   📊 After adding 25 entries: {} total entries, {} evictions\n", .{ final_stats.total_entries, final_stats.evictions });
-
-    // Test cache cleanup
-    std.debug.print("\n🧹 Cache Cleanup Test:\n", .{});
-
-    // Wait a bit, then clean up old entries
-    std.Thread.sleep(100 * std.time.ns_per_ms);
-    cache.cleanup(); // Remove entries older than default TTL
-
-    const cleanup_stats = cache.getStats();
-    std.debug.print("   📊 After cleanup: {} total entries\n", .{cleanup_stats.total_entries});
+    std.debug.print("   📊 After adding 25 entries: {} total entries, {} evictions\n", .{ final_stats.entries, final_stats.eviction_count });
 
     // Memory usage information
     std.debug.print("\n💾 Memory Usage:\n", .{});
-    std.debug.print("   📊 Current memory usage: {d:.2} KB\n", .{@as(f64, @floatFromInt(cleanup_stats.memory_used)) / 1024.0});
-    std.debug.print("   📊 Memory limit: {d:.2} KB\n", .{@as(f64, @floatFromInt(cleanup_stats.memory_limit)) / 1024.0});
-    std.debug.print("   📊 Memory efficiency: {d:.1}%\n", .{(@as(f64, @floatFromInt(cleanup_stats.memory_used)) / @as(f64, @floatFromInt(cleanup_stats.memory_limit))) * 100.0});
+    std.debug.print("   📊 Current memory usage: {d:.2} KB\n", .{@as(f64, @floatFromInt(final_stats.memory_usage_bytes)) / 1024.0});
+    std.debug.print("   📊 Memory limit: {d:.2} KB\n", .{@as(f64, @floatFromInt(final_stats.max_memory_bytes)) / 1024.0});
 
     std.debug.print("\n🎯 Query cache functionality is working!\n", .{});
     std.debug.print("💡 Cache provides significant performance improvements for repeated queries\n", .{});

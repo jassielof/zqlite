@@ -48,7 +48,7 @@ pub fn main() !void {
         std.debug.print("FAILED ({})\n", .{err});
         return err;
     };
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     if (result.rows.items.len != 1) {
         std.debug.print("FAILED (expected 1 row, got {})\n", .{result.rows.items.len});
@@ -82,7 +82,7 @@ pub fn main() !void {
         std.debug.print("FAILED ({})\n", .{err});
         return err;
     };
-    defer count_result.deinit(allocator);
+    defer count_result.deinit();
 
     switch (count_result.rows.items[0].values[0]) {
         .Integer => |count| {

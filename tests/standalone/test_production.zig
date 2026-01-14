@@ -80,7 +80,7 @@ fn testAsyncOperations(allocator: std.mem.Allocator) !void {
     const results = try async_db.batchExecuteAsync(&queries);
     defer {
         for (results) |result| {
-            result.deinit(allocator);
+            result.deinit();
         }
         allocator.free(results);
     }
@@ -260,7 +260,7 @@ fn testPerformance(allocator: std.mem.Allocator) !void {
 
     defer {
         for (concurrent_results) |result| {
-            result.deinit(allocator);
+            result.deinit();
         }
         allocator.free(concurrent_results);
     }

@@ -15,6 +15,8 @@ pub const Statement = union(enum) {
     DropTable: DropTableStatement,
     // PostgreSQL compatibility statements
     With: WithStatement, // Common Table Expressions
+    Pragma: PragmaStatement, // PRAGMA statements for introspection
+    Explain: ExplainStatement, // EXPLAIN / EXPLAIN QUERY PLAN
 
     pub fn deinit(self: *Statement, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -30,7 +32,33 @@ pub const Statement = union(enum) {
             .DropIndex => |*stmt| stmt.deinit(allocator),
             .DropTable => |*stmt| stmt.deinit(allocator),
             .With => |*stmt| stmt.deinit(allocator),
+            .Pragma => |*stmt| stmt.deinit(allocator),
+            .Explain => |*stmt| stmt.deinit(allocator),
         }
+    }
+};
+
+/// PRAGMA statement for database introspection
+pub const PragmaStatement = struct {
+    name: []const u8, // e.g., "table_info"
+    argument: ?[]const u8, // e.g., table name for table_info
+
+    pub fn deinit(self: *PragmaStatement, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        if (self.argument) |arg| {
+            allocator.free(arg);
+        }
+    }
+};
+
+/// EXPLAIN / EXPLAIN QUERY PLAN statement
+pub const ExplainStatement = struct {
+    is_query_plan: bool, // true for EXPLAIN QUERY PLAN, false for just EXPLAIN
+    inner_statement: *Statement, // The statement to explain
+
+    pub fn deinit(self: *ExplainStatement, allocator: std.mem.Allocator) void {
+        self.inner_statement.deinit(allocator);
+        allocator.destroy(self.inner_statement);
     }
 };
 
@@ -202,6 +230,7 @@ pub const ColumnExpression = union(enum) {
     Aggregate: AggregateFunction,
     Window: WindowFunction, // PostgreSQL window functions
     FunctionCall: FunctionCall, // Regular function calls
+    Case: CaseExpression, // CASE WHEN ... THEN ... ELSE ... END
 
     pub fn deinit(self: *ColumnExpression, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -209,6 +238,7 @@ pub const ColumnExpression = union(enum) {
             .Aggregate => |*agg| agg.deinit(allocator),
             .Window => |*window| window.deinit(allocator),
             .FunctionCall => |*func| func.deinit(allocator),
+            .Case => |*case_expr| case_expr.deinit(allocator),
         }
     }
 };
@@ -362,10 +392,15 @@ pub const ComparisonCondition = struct {
     left: Expression,
     operator: ComparisonOperator,
     right: Expression,
+    /// Optional third expression for BETWEEN (high value)
+    extra: ?Expression = null,
 
     pub fn deinit(self: *ComparisonCondition, allocator: std.mem.Allocator) void {
         self.left.deinit(allocator);
         self.right.deinit(allocator);
+        if (self.extra) |*extra| {
+            extra.deinit(allocator);
+        }
     }
 };
 
@@ -392,13 +427,56 @@ pub const ComparisonOperator = enum {
     GreaterThan,
     GreaterThanOrEqual,
     Like,
+    NotLike,
     In,
+    NotIn,
+    IsNull,
+    IsNotNull,
+    Between,
+    NotBetween,
 };
 
 /// Logical operators
 pub const LogicalOperator = enum {
     And,
     Or,
+};
+
+/// CASE WHEN branch
+pub const CaseWhenBranch = struct {
+    condition: *Condition,
+    result: Value,
+
+    pub fn deinit(self: *CaseWhenBranch, allocator: std.mem.Allocator) void {
+        self.condition.deinit(allocator);
+        allocator.destroy(self.condition);
+        self.result.deinit(allocator);
+    }
+};
+
+/// CASE expression (CASE WHEN ... THEN ... ELSE ... END)
+pub const CaseExpression = struct {
+    /// Optional expression for simple CASE (CASE expr WHEN value THEN ...)
+    operand: ?*Value,
+    /// WHEN branches
+    branches: []CaseWhenBranch,
+    /// ELSE result (null if no ELSE clause)
+    else_result: ?*Value,
+
+    pub fn deinit(self: *CaseExpression, allocator: std.mem.Allocator) void {
+        if (self.operand) |op| {
+            op.deinit(allocator);
+            allocator.destroy(op);
+        }
+        for (self.branches) |*branch| {
+            branch.deinit(allocator);
+        }
+        allocator.free(self.branches);
+        if (self.else_result) |else_res| {
+            else_res.deinit(allocator);
+            allocator.destroy(else_res);
+        }
+    }
 };
 
 /// Expression (column reference or literal value)
@@ -431,12 +509,14 @@ pub const Value = union(enum) {
     Null,
     Parameter: u32, // Parameter placeholder index
     FunctionCall: FunctionCall, // Support function calls in INSERT VALUES
+    Case: CaseExpression, // CASE WHEN ... THEN ... ELSE ... END
 
     pub fn deinit(self: Value, allocator: std.mem.Allocator) void {
         switch (self) {
             .Text => |text| allocator.free(text),
             .Blob => |blob| allocator.free(blob),
             .FunctionCall => |func| func.deinit(allocator),
+            .Case => |*case_expr| @constCast(case_expr).deinit(allocator),
             else => {},
         }
     }

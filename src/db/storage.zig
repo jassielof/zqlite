@@ -363,6 +363,16 @@ pub const Table = struct {
         return try self.btree.selectAll(allocator);
     }
 
+    /// Get column index by name
+    pub fn getColumnIndex(self: *Self, column_name: []const u8) ?usize {
+        for (self.schema.columns, 0..) |col, idx| {
+            if (std.mem.eql(u8, col.name, column_name)) {
+                return idx;
+            }
+        }
+        return null;
+    }
+
     /// Clean up table
     pub fn deinit(self: *Self) void {
         self.btree.deinit();

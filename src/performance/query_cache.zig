@@ -1,11 +1,11 @@
 const std = @import("std");
 const storage = @import("../db/storage.zig");
 
-/// Query result cache for improved performance
+/// Query result cache for improved performance using intrusive doubly-linked list
 pub const QueryCache = struct {
     allocator: std.mem.Allocator,
     cache_entries: std.HashMap(u64, *CacheEntry, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
-    lru_list: std.DoublyLinkedList(*CacheEntry) = .{},
+    lru_list: std.DoublyLinkedList = .{},
     max_entries: usize,
     max_memory_bytes: usize,
     current_memory_usage: usize,
@@ -34,7 +34,7 @@ pub const QueryCache = struct {
     /// Get cached query result
     pub fn get(self: *Self, sql_hash: u64) ?*CachedResult {
         if (self.cache_entries.get(sql_hash)) |entry| {
-            // Move to front of LRU list
+            // Move to front of LRU list (most recently used)
             self.lru_list.remove(&entry.lru_node);
             self.lru_list.prepend(&entry.lru_node);
 
@@ -82,7 +82,6 @@ pub const QueryCache = struct {
         // Add to cache
         try self.cache_entries.put(sql_hash, entry);
         self.lru_list.prepend(&entry.lru_node);
-        entry.lru_node.data = entry;
 
         self.current_memory_usage += entry.memory_size;
 
@@ -157,7 +156,7 @@ pub const QueryCache = struct {
             (self.current_memory_usage > self.max_memory_bytes))
         {
             if (self.lru_list.last) |last_node| {
-                const entry = last_node.data;
+                const entry = CacheEntry.fromNode(last_node);
                 try self.evictEntry(entry);
             } else {
                 break;
@@ -187,7 +186,7 @@ pub const QueryCache = struct {
     /// Clear all cached entries
     pub fn clear(self: *Self) void {
         while (self.lru_list.first) |first_node| {
-            const entry = first_node.data;
+            const entry = CacheEntry.fromNode(first_node);
             self.evictEntry(entry) catch {};
         }
 
@@ -220,7 +219,7 @@ pub const QueryCache = struct {
     pub fn cleanupExpired(self: *Self, ttl_seconds: i64) !void {
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const current_time = ts.sec;
-        var entries_to_remove = std.ArrayList(*CacheEntry){};
+        var entries_to_remove: std.ArrayList(*CacheEntry) = .{};
         defer entries_to_remove.deinit(self.allocator);
 
         var iterator = self.cache_entries.iterator();
@@ -237,7 +236,7 @@ pub const QueryCache = struct {
 
     /// Invalidate cache entries that might be affected by a table update
     pub fn invalidateTable(self: *Self, table_name: []const u8) !void {
-        var entries_to_remove = std.ArrayList(*CacheEntry){};
+        var entries_to_remove: std.ArrayList(*CacheEntry) = .{};
         defer entries_to_remove.deinit(self.allocator);
 
         var iterator = self.cache_entries.iterator();
@@ -270,7 +269,13 @@ const CacheEntry = struct {
     last_accessed: i64,
     access_count: u64,
     memory_size: usize,
-    lru_node: std.DoublyLinkedList(*CacheEntry).Node = .{ .data = undefined },
+    /// Intrusive node for LRU list - use @fieldParentPtr to get back to CacheEntry
+    lru_node: std.DoublyLinkedList.Node = .{},
+
+    /// Get CacheEntry from its lru_node pointer
+    pub fn fromNode(node: *std.DoublyLinkedList.Node) *CacheEntry {
+        return @fieldParentPtr("lru_node", node);
+    }
 };
 
 /// Cached query result

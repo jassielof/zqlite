@@ -82,7 +82,7 @@ fn testDefaultTimestampMemory(allocator: std.mem.Allocator) !void {
         defer stmt.deinit();
 
         var result = try stmt.execute();
-        defer result.deinit(allocator);
+        defer result.deinit();
 
         // Verify results
         if (result.rows.items.len != 10) {
@@ -130,7 +130,7 @@ fn testHeavyCrudOperations(allocator: std.mem.Allocator) !void {
         defer stmt.deinit();
 
         var result = try stmt.execute();
-        defer result.deinit(allocator);
+        defer result.deinit();
     }
 }
 
@@ -163,7 +163,7 @@ fn testLargeTextOperations(allocator: std.mem.Allocator) !void {
     defer stmt.deinit();
 
     var result = try stmt.execute();
-    defer result.deinit(allocator);
+    defer result.deinit();
 
     if (result.rows.items.len != 5) {
         return error.UnexpectedRowCount;
@@ -251,7 +251,7 @@ fn testComplexJoinOperations(allocator: std.mem.Allocator) !void {
         defer stmt.deinit();
 
         var result = try stmt.execute();
-        defer result.deinit(allocator);
+        defer result.deinit();
 
         // Three-table JOIN
         var stmt2 = try conn.prepare(
@@ -265,7 +265,7 @@ fn testComplexJoinOperations(allocator: std.mem.Allocator) !void {
         defer stmt2.deinit();
 
         var result2 = try stmt2.execute();
-        defer result2.deinit(allocator);
+        defer result2.deinit();
     }
 }
 
@@ -298,7 +298,7 @@ fn testMultipleConnectionLifecycle(allocator: std.mem.Allocator) !void {
         defer stmt.deinit();
 
         var result = try stmt.execute();
-        defer result.deinit(allocator);
+        defer result.deinit();
 
         switch (result.rows.items[0].values[0]) {
             .Integer => |count| {
@@ -344,13 +344,13 @@ fn testPreparedStatementStress(allocator: std.mem.Allocator) !void {
     var round: u32 = 0;
     while (round < 20) : (round += 1) {
         var result1 = try stmt1.execute();
-        defer result1.deinit(allocator);
+        defer result1.deinit();
 
         var result2 = try stmt2.execute();
-        defer result2.deinit(allocator);
+        defer result2.deinit();
 
         var result3 = try stmt3.execute();
-        defer result3.deinit(allocator);
+        defer result3.deinit();
 
         // Update data between queries
         const update_sql = try std.fmt.allocPrint(allocator, "UPDATE prep_test SET counter = counter + 1 WHERE id % 3 = {}", .{round % 3});
