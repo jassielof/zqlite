@@ -639,6 +639,22 @@ pub const VirtualMachine = struct {
         const end = @min(start + limit.count, result.rows.items.len);
 
         if (start > 0 or end < result.rows.items.len) {
+            // Free rows excluded by OFFSET (rows before start)
+            for (result.rows.items[0..start]) |row| {
+                for (row.values) |value| {
+                    value.deinit(self.connection.allocator);
+                }
+                self.connection.allocator.free(row.values);
+            }
+
+            // Free rows excluded by LIMIT (rows after end)
+            for (result.rows.items[end..]) |row| {
+                for (row.values) |value| {
+                    value.deinit(self.connection.allocator);
+                }
+                self.connection.allocator.free(row.values);
+            }
+
             // Create new slice with limited rows
             var limited_rows: std.ArrayList(storage.Row) = .{};
             for (result.rows.items[start..end]) |row| {
